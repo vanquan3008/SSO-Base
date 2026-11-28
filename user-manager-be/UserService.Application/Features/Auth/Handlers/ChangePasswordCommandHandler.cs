@@ -1,5 +1,4 @@
 using MediatR;
-using Microsoft.Extensions.Logging;
 using UserService.Application.Features.Auth.Commands;
 using UserService.Application.Interfaces.Services.Security;
 using UserService.Application.Services;
@@ -14,20 +13,17 @@ public class ChangePasswordCommandHandler : IRequestHandler<ChangePasswordComman
     private readonly ISessionService _sessions;
     private readonly IRequestContext _requestContext;
     private readonly IAuditLogger _audit;
-    private readonly ILogger<ChangePasswordCommandHandler> _logger;
 
     public ChangePasswordCommandHandler(
         IIdentityService identityService,
         ISessionService sessions,
         IRequestContext requestContext,
-        IAuditLogger audit,
-        ILogger<ChangePasswordCommandHandler> logger)
+        IAuditLogger audit)
     {
         _identityService = identityService;
         _sessions = sessions;
         _requestContext = requestContext;
         _audit = audit;
-        _logger = logger;
     }
 
     public async Task<Unit> Handle(ChangePasswordCommand command, CancellationToken cancellationToken)
@@ -47,7 +43,6 @@ public class ChangePasswordCommandHandler : IRequestHandler<ChangePasswordComman
         // Sign out every other device; the current session stays signed in.
         var revoked = await _sessions.RevokeAllAsync(command.UserId, SessionRevocationReasons.PasswordChanged, _requestContext.SessionId, cancellationToken);
         await _audit.LogAsync(AuditEventTypes.PasswordChanged, true, new AuditEntry(ActorUserId: command.UserId, Details: new { revokedSessions = revoked }), cancellationToken);
-        _logger.LogInformation("Password changed for user {UserId}; {Count} other sessions revoked", command.UserId, revoked);
         return Unit.Value;
     }
 }
