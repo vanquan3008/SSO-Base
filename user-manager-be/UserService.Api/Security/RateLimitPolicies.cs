@@ -1,5 +1,6 @@
 using System.Threading.RateLimiting;
 using Microsoft.AspNetCore.RateLimiting;
+using UserService.Application.Common;
 using UserService.Application.Configuration;
 
 namespace UserService.Api.Security;
@@ -30,7 +31,9 @@ public static class RateLimitPolicies
                 context.HttpContext.RequestServices.GetRequiredService<ILoggerFactory>()
                     .CreateLogger("RateLimiting")
                     .LogWarning("Rate limit exceeded for {Ip} on {Method} {Path}",
-                        ClientKey(context.HttpContext), context.HttpContext.Request.Method, context.HttpContext.Request.Path);
+                        ClientKey(context.HttpContext),
+                        LogSanitizer.Clean(context.HttpContext.Request.Method),
+                        LogSanitizer.Clean(context.HttpContext.Request.Path.Value));
 
                 await context.HttpContext.Response.WriteAsJsonAsync(new ApiResponse<object>(
                     false, null, "Too many requests",

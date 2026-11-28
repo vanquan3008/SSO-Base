@@ -628,6 +628,15 @@ export interface AppTranslations {
   adOverviewDesc: string;
   adOwner: string;
   adNoRedirects: string;
+  adRedirectsHint: string;
+  adAddRedirect: string;
+  adRemoveRedirect: string;
+  adRedirectInvalid: string;
+  adRedirectDuplicate: string;
+  adRedirectsTooMany: string;
+  adRedirectsSaved: string;
+  adRedirectsEmptyTitle: string;
+  adRedirectsEmptyConfirm: string;
   adNotConfigured: string;
   adCredentials: string;
   adPublicNote: string;
@@ -1358,7 +1367,7 @@ const TRANSLATIONS: { en: AppTranslations } & Record<Exclude<Locale, 'en'>, Part
     appsConfidential: "Confidential",
     appsConfidentialDesc: "Ứng dụng phía máy chủ có thể giữ secret.",
     appsRedirects: "Redirect URI cho phép",
-    appsRedirectsHint: "Phân tách bằng dấu phẩy, khớp chính xác. Bắt buộc HTTPS trừ localhost.",
+    appsRedirectsHint: "Mỗi dòng một URI hoặc phân tách bằng dấu phẩy. Khớp chính xác; bắt buộc HTTPS trừ localhost.",
     appsBackchannel: "Back-channel logout URI",
     appsBackchannelHint: "Nhận logout token đã ký khi phiên người dùng kết thúc.",
     appsLogo: "Logo",
@@ -1377,6 +1386,15 @@ const TRANSLATIONS: { en: AppTranslations } & Record<Exclude<Locale, 'en'>, Part
     adOverviewDesc: "Định danh và URI đã đăng ký cho client OAuth này.",
     adOwner: "Chủ sở hữu",
     adNoRedirects: "Chưa có redirect URI — yêu cầu ủy quyền sẽ bị từ chối.",
+    adRedirectsHint: "So khớp chính xác từng ký tự. Chỉ HTTPS; HTTP chỉ dùng cho localhost, và IP loopback (127.0.0.1) được dùng port bất kỳ.",
+    adAddRedirect: "Thêm redirect URI",
+    adRemoveRedirect: "Xóa",
+    adRedirectInvalid: "Phải là URL HTTPS tuyệt đối (HTTP chỉ cho localhost), không có #fragment, thông tin đăng nhập hay dấu phẩy.",
+    adRedirectDuplicate: "URI bị trùng.",
+    adRedirectsTooMany: "Tối đa 20 redirect URI.",
+    adRedirectsSaved: "Đã cập nhật redirect URI.",
+    adRedirectsEmptyTitle: "Xóa toàn bộ redirect URI?",
+    adRedirectsEmptyConfirm: "Không có redirect URI, ứng dụng này sẽ không thể đăng nhập người dùng nữa.",
     adNotConfigured: "Chưa cấu hình",
     adCredentials: "Client secret",
     adPublicNote: "Client public xác thực bằng PKCE, không có secret.",
@@ -2126,7 +2144,7 @@ const TRANSLATIONS: { en: AppTranslations } & Record<Exclude<Locale, 'en'>, Part
     appsConfidential: "Confidential",
     appsConfidentialDesc: "Server-side apps that can keep a client secret.",
     appsRedirects: "Allowed redirect URIs",
-    appsRedirectsHint: "Comma-separated, exact match. HTTPS required except for localhost.",
+    appsRedirectsHint: "One per line or comma-separated. Matched exactly; HTTPS required except on localhost.",
     appsBackchannel: "Back-channel logout URI",
     appsBackchannelHint: "Receives a signed logout token when a user's session ends.",
     appsLogo: "Logo",
@@ -2145,6 +2163,15 @@ const TRANSLATIONS: { en: AppTranslations } & Record<Exclude<Locale, 'en'>, Part
     adOverviewDesc: "Identifiers and URIs registered for this OAuth client.",
     adOwner: "Owner",
     adNoRedirects: "No redirect URIs registered — authorization requests will be rejected.",
+    adRedirectsHint: "Matched exactly, character for character. HTTPS only; HTTP is allowed on localhost, and loopback IPs (127.0.0.1) may use any port.",
+    adAddRedirect: "Add redirect URI",
+    adRemoveRedirect: "Remove",
+    adRedirectInvalid: "Must be an absolute HTTPS URL (HTTP only on localhost) without a #fragment, user info or comma.",
+    adRedirectDuplicate: "Duplicate URI.",
+    adRedirectsTooMany: "At most 20 redirect URIs.",
+    adRedirectsSaved: "Redirect URIs updated.",
+    adRedirectsEmptyTitle: "Remove all redirect URIs?",
+    adRedirectsEmptyConfirm: "Without a redirect URI this application can no longer sign users in.",
     adNotConfigured: "Not configured",
     adCredentials: "Client secret",
     adPublicNote: "Public clients authenticate with PKCE and never receive a client secret.",
@@ -2872,7 +2899,7 @@ const TRANSLATIONS: { en: AppTranslations } & Record<Exclude<Locale, 'en'>, Part
     appsConfidential: "机密",
     appsConfidentialDesc: "可安全保存客户端密钥的服务端应用。",
     appsRedirects: "允许的重定向 URI",
-    appsRedirectsHint: "逗号分隔，精确匹配。除 localhost 外必须为 HTTPS。",
+    appsRedirectsHint: "每行一个或用逗号分隔。精确匹配；除 localhost 外必须为 HTTPS。",
     appsBackchannel: "后端登出 URI",
     appsBackchannelHint: "用户会话结束时接收签名的登出令牌。",
     appsLogo: "图标",
@@ -2891,6 +2918,15 @@ const TRANSLATIONS: { en: AppTranslations } & Record<Exclude<Locale, 'en'>, Part
     adOverviewDesc: "该 OAuth 客户端注册的标识与 URI。",
     adOwner: "所有者",
     adNoRedirects: "未注册重定向 URI——授权请求将被拒绝。",
+    adRedirectsHint: "逐字符精确匹配。仅限 HTTPS；localhost 可用 HTTP，回环 IP（127.0.0.1）可使用任意端口。",
+    adAddRedirect: "添加重定向 URI",
+    adRemoveRedirect: "移除",
+    adRedirectInvalid: "必须是绝对 HTTPS URL（仅 localhost 可用 HTTP），且不含 #片段、用户信息或逗号。",
+    adRedirectDuplicate: "URI 重复。",
+    adRedirectsTooMany: "最多 20 个重定向 URI。",
+    adRedirectsSaved: "重定向 URI 已更新。",
+    adRedirectsEmptyTitle: "移除全部重定向 URI？",
+    adRedirectsEmptyConfirm: "没有重定向 URI，该应用将无法再让用户登录。",
     adNotConfigured: "未配置",
     adCredentials: "客户端密钥",
     adPublicNote: "公共客户端使用 PKCE 认证，不会获得客户端密钥。",

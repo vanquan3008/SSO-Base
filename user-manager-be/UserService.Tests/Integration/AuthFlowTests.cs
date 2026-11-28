@@ -1,8 +1,13 @@
 using System.Net;
+using System.Net.Http.Json;
 using System.Security.Cryptography;
 using System.Text;
+using Microsoft.Extensions.DependencyInjection;
 using UserService.Application.Common;
+using UserService.Application.DTOs.Auth;
+using UserService.Application.Interfaces.Services;
 using UserService.Application.Services.Security;
+using UserService.Domain.Constants;
 
 namespace UserService.Tests.Integration;
 
@@ -25,6 +30,22 @@ public sealed class AuthFlowTests
         var token = json.GetProperty("data").GetProperty("accessToken").GetString()!;
         client.UseBearer(token);
         return (client, token);
+    }
+
+    /// <summary>Self-registered accounts get the plain User role (the seeded test users are SuperAdmins).</summary>
+    private async Task<HttpClient> RegisterPlainUserAsync()
+    {
+        var member = _factory.CreateBrowserClient();
+        var email = $"self-{Guid.NewGuid():N}@integration.test";
+        var register = await member.PostJsonAsync("/api/auth/register", new
+        {
+            email, password = "Str0ng#Password", username = "u" + Guid.NewGuid().ToString("N")[..10],
+            firstName = "Self", lastName = "Registered", dateOfBirth = "1990-01-01"
+        });
+        var registered = await register.ReadJsonAsync();
+        register.StatusCode.Should().Be(HttpStatusCode.Created, registered.ToString());
+        member.UseBearer(registered.GetProperty("data").GetProperty("accessToken").GetString()!);
+        return member;
     }
 
     [Fact]
@@ -125,17 +146,7 @@ public sealed class AuthFlowTests
     [Fact]
     public async Task NonAdmin_CannotReadAuditLogs_AdminCan()
     {
-        // Self-registered accounts get the plain User role.
-        var member = _factory.CreateBrowserClient();
-        var email = $"self-{Guid.NewGuid():N}@integration.test";
-        var register = await member.PostJsonAsync("/api/auth/register", new
-        {
-            email, password = "Str0ng#Password", username = "u" + Guid.NewGuid().ToString("N")[..10],
-            firstName = "Self", lastName = "Registered", dateOfBirth = "1990-01-01"
-        });
-        var registered = await register.ReadJsonAsync();
-        register.StatusCode.Should().Be(HttpStatusCode.Created, registered.ToString());
-        member.UseBearer(registered.GetProperty("data").GetProperty("accessToken").GetString()!);
+        var member = await RegisterPlainUserAsync();
         (await member.GetAsync("/api/users/me")).StatusCode.Should().Be(HttpStatusCode.OK);
         (await member.GetAsync("/api/audit-logs")).StatusCode.Should().Be(HttpStatusCode.Forbidden);
         (await member.PostAsync("/api/system/signing-keys/rotate", null)).StatusCode.Should().Be(HttpStatusCode.Forbidden);
@@ -195,6 +206,76 @@ public sealed class AuthFlowTests
     }
 
     [Fact]
+    public async Task RedirectUris_CanBeReplacedByAdmins_AndAreValidated()
+    {
+        var (admin, _) = await LoginAsync(SsoApiFactory.AdminEmail, SsoApiFactory.AdminPassword);
+        var apps = (await (await admin.GetAsync("/api/applications")).ReadJsonAsync()).GetProperty("data");
+        var console = apps.EnumerateArray().Single(a => a.GetProperty("clientId").GetString() == SsoApiFactory.ConsoleClientId);
+        var url = $"/api/applications/{console.GetProperty("id").GetString()}/redirect-uris";
+        var original = console.GetProperty("allowedRedirectUris").GetString()!.Split(',');
+
+        try
+        {
+            var fragment = await admin.PutAsJsonAsync(url, new { redirectUris = new[] { "https://app.example.com/cb#x" } }, HttpTestExtensions.Json);
+            fragment.StatusCode.Should().Be(HttpStatusCode.UnprocessableEntity);
+
+            // The first-party console must keep at least one callback, or nobody could sign in to it.
+            var empty = await admin.PutAsJsonAsync(url, new { redirectUris = Array.Empty<string>() }, HttpTestExtensions.Json);
+            empty.StatusCode.Should().Be(HttpStatusCode.UnprocessableEntity);
+
+            var updated = await admin.PutAsJsonAsync(url, new
+            {
+                redirectUris = new[] { SsoApiFactory.RedirectUri, " https://app.example.com/cb ", "https://app.example.com/cb" }
+            }, HttpTestExtensions.Json);
+            var json = await updated.ReadJsonAsync();
+            updated.StatusCode.Should().Be(HttpStatusCode.OK, json.ToString());
+            json.GetProperty("data").GetProperty("allowedRedirectUris").GetString()!.Split(',')
+                .Should().BeEquivalentTo(SsoApiFactory.RedirectUri, "https://app.example.com/cb");
+
+            var member = await RegisterPlainUserAsync();
+            var forbidden = await member.PutAsJsonAsync(url, new { redirectUris = new[] { "https://evil.test/cb" } }, HttpTestExtensions.Json);
+            forbidden.StatusCode.Should().Be(HttpStatusCode.Forbidden);
+        }
+        finally
+        {
+            await admin.PutAsJsonAsync(url, new { redirectUris = original }, HttpTestExtensions.Json);
+        }
+    }
+
+    [Fact]
+    public async Task ThirdPartyClientToken_IsAcceptedOnlyByUserInfo()
+    {
+        var (_, adminToken) = await LoginAsync(SsoApiFactory.AdminEmail, SsoApiFactory.AdminPassword);
+        var adminId = Guid.Parse(HttpTestExtensions.JwtPayload(adminToken).GetProperty("sub").GetString()!);
+
+        using var scope = _factory.Services.CreateScope();
+        var tokens = scope.ServiceProvider.GetRequiredService<ITokenService>();
+        // Even a SuperAdmin's token, once issued to a third-party client, must not unlock the platform API.
+        var clientToken = tokens.GenerateAccessToken(new AccessTokenRequest(
+            adminId, SsoApiFactory.AdminEmail, "admin", new[] { RoleNames.SuperAdmin }, new[] { "*" },
+            OAuthScopes: new[] { "openid", "email" }, ClientId: "third-party-app", Audience: "third-party-app"));
+        var forgedAudience = tokens.GenerateAccessToken(new AccessTokenRequest(
+            adminId, SsoApiFactory.AdminEmail, "admin", new[] { RoleNames.SuperAdmin },
+            ClientId: "third-party-app", Audience: "another-app"));
+        var idToken = tokens.GenerateIdToken(new IdTokenRequest(
+            adminId, "third-party-app", null, null, DateTime.UtcNow, new[] { "openid" },
+            SsoApiFactory.AdminEmail, true, "admin", "admin", null));
+
+        var client = _factory.CreateClient();
+        async Task<HttpStatusCode> GetAsync(string url, string token)
+        {
+            client.UseBearer(token);
+            return (await client.GetAsync(url)).StatusCode;
+        }
+
+        (await GetAsync("/api/users", clientToken)).Should().Be(HttpStatusCode.Unauthorized);
+        (await GetAsync("/api/oauth/userinfo", clientToken)).Should().Be(HttpStatusCode.OK);
+        (await GetAsync("/api/oauth/userinfo", forgedAudience)).Should().Be(HttpStatusCode.Unauthorized);
+        (await GetAsync("/api/oauth/userinfo", idToken)).Should().Be(HttpStatusCode.Unauthorized);
+        (await GetAsync("/api/oauth/userinfo", adminToken)).Should().Be(HttpStatusCode.OK);
+    }
+
+    [Fact]
     public async Task OAuthCodeFlow_WithPkce_IssuesIdToken_AndDetectsCodeReplay()
     {
         var sso = _factory.CreateBrowserClient();
@@ -240,6 +321,9 @@ public sealed class AuthFlowTests
         idToken.GetProperty("nonce").GetString().Should().Be("n-1");
         idToken.GetProperty("aud").GetString().Should().Be(SsoApiFactory.ConsoleClientId);
         idToken.GetProperty("sid").GetString().Should().Be(HttpTestExtensions.JwtPayload(ssoToken).GetProperty("sid").GetString());
+        // The seeded console is the first-party client, so its access token targets the platform API.
+        HttpTestExtensions.JwtPayload(tokenJson.GetProperty("access_token").GetString()!)
+            .GetProperty("aud").GetString().Should().Be("integration-api");
 
         var replay = await app.PostAsync("/api/oauth/token", Form(verifier));
         replay.StatusCode.Should().Be(HttpStatusCode.BadRequest);

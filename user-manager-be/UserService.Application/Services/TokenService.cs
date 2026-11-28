@@ -12,6 +12,9 @@ namespace UserService.Application.Services;
 
 public class TokenService : ITokenService
 {
+    /// <summary>RFC 9068 <c>typ</c> header for JWT access tokens.</summary>
+    public const string AccessTokenType = "at+jwt";
+
     private readonly IClaimsFactory _claimsFactory;
     private readonly AppSettings _appSettings;
     private readonly ISigningKeyProvider _keys;
@@ -34,13 +37,13 @@ public class TokenService : ITokenService
         return Write(new SecurityTokenDescriptor
         {
             Issuer = _appSettings.Jwt.Issuer,
-            Audience = _appSettings.Jwt.Audience,
+            Audience = string.IsNullOrWhiteSpace(request.Audience) ? _appSettings.Jwt.Audience : request.Audience,
             Subject = new ClaimsIdentity(claims),
             IssuedAt = now,
             NotBefore = now,
             Expires = now.AddMinutes(_appSettings.Jwt.AccessTokenExpirationMinutes),
             SigningCredentials = _keys.GetSigningCredentials(),
-            TokenType = "at+jwt"
+            TokenType = AccessTokenType
         });
     }
 

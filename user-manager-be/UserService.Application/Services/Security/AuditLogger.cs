@@ -1,5 +1,6 @@
 using System.Text.Json;
 using Microsoft.Extensions.Logging;
+using UserService.Application.Common;
 using UserService.Application.Interfaces.Services.Security;
 using UserService.Domain.Entities;
 using UserService.Domain.Interfaces;
@@ -63,7 +64,8 @@ public sealed class AuditLogger : IAuditLogger
             _logger.Log(
                 succeeded ? LogLevel.Information : LogLevel.Warning,
                 "Audit {EventType} succeeded={Succeeded} actor={ActorUserId} target={TargetType}:{TargetId} ip={IpAddress}",
-                eventType, succeeded, actorId, entry.TargetType, entry.TargetId, _requestContext.IpAddress);
+                LogSanitizer.Clean(eventType), succeeded, actorId,
+                LogSanitizer.Clean(entry.TargetType), LogSanitizer.Clean(entry.TargetId), LogSanitizer.Clean(_requestContext.IpAddress));
         }
         catch (Exception ex)
         {

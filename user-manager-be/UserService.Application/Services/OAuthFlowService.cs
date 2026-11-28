@@ -269,8 +269,8 @@ public sealed class OAuthFlowService : IOAuthFlowService
 
     private void ValidateRedirectUri(AppApplication app, string redirectUri)
     {
-        var allowedUris = string.Join(",", app.AllowedRedirectUris.Select(uri => (string)uri));
-        if (!_redirectUriPolicy.IsAllowed(redirectUri, allowedUris))
+        var registered = app.AllowedRedirectUris.Select(uri => uri.Value).ToArray();
+        if (!_redirectUriPolicy.IsAllowed(redirectUri, registered))
             throw new BusinessRuleValidationException("InvalidRedirectUri", "redirect_uri is not allowed.");
     }
 
@@ -479,6 +479,9 @@ public sealed class OAuthFlowService : IOAuthFlowService
         var grantedScopes = scopes.Split(new[] { ' ', ',' }, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
         var oauthScopes = OAuthScopeNames.FilterDefaultScopes(grantedScopes);
         var clientId = app.ApiKey.Value;
+        // RFC 9068 / RFC 9700 §2.3: bind the token to its intended audience. Only first-party clients get tokens
+        // for the platform API; a third-party client's token is scoped to itself (and the UserInfo endpoint).
+        var audience = _appSettings.OAuth.IsFirstPartyClient(clientId) ? _appSettings.Jwt.Audience : clientId;
 
         var accessToken = _tokenService.GenerateAccessToken(
             new AccessTokenRequest(
@@ -492,7 +495,8 @@ public sealed class OAuthFlowService : IOAuthFlowService
                 SSOAppIds: null,
                 OAuthScopes: oauthScopes,
                 SessionId: sessionId,
-                ClientId: clientId));
+                ClientId: clientId,
+                Audience: audience));
 
         string? idToken = null;
         if (includeIdToken && grantedScopes.Contains("openid", StringComparer.OrdinalIgnoreCase))

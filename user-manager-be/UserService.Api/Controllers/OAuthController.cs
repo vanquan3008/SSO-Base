@@ -99,45 +99,65 @@ public class OAuthController : ApiControllerBase
         Response.Headers.CacheControl = "no-store";
         Response.Headers.Pragma = "no-cache";
 
-        if (Request.HasFormContentType)
+        // The content type only selects how the request is parsed and how the response is shaped.
+        // Client authentication and the code/refresh exchange run through the same single path.
+        var isForm = Request.HasFormContentType;
+        var (basicId, basicSecret) = ReadBasicCredentials();
+        var parsed = isForm
+            ? await ReadFormTokenRequestAsync(cancellationToken)
+            : await ReadJsonTokenRequestAsync(cancellationToken);
+        var tokenRequest = parsed with
         {
-            var form = await Request.ReadFormAsync(cancellationToken);
-            var (basicId, basicSecret) = ReadBasicCredentials();
-            var tokenRequest = new OAuthTokenRequest(
-                form["grant_type"].ToString(),
-                basicId ?? form["client_id"].ToString(),
-                form["redirect_uri"].ToString(),
-                basicSecret ?? NullIfEmpty(form["client_secret"].ToString()),
-                NullIfEmpty(form["code"].ToString()),
-                NullIfEmpty(form["code_verifier"].ToString()),
-                NullIfEmpty(form["refresh_token"].ToString()));
+            ClientId = basicId ?? parsed.ClientId,
+            ClientSecret = basicSecret ?? parsed.ClientSecret
+        };
 
-            try
-            {
-                var result = await _mediator.Send(new ExchangeOAuthCodeCommand(tokenRequest), cancellationToken);
-                return Ok(new Dictionary<string, object?>
-                {
-                    ["access_token"] = result.AccessToken,
-                    ["token_type"] = result.TokenType,
-                    ["expires_in"] = result.ExpiresIn,
-                    ["refresh_token"] = result.RefreshToken,
-                    ["scope"] = string.Join(' ', result.Scopes),
-                    ["id_token"] = result.IdToken
-                }.Where(kv => kv.Value is not null).ToDictionary(kv => kv.Key, kv => kv.Value));
-            }
-            catch (OAuthProtocolException ex)
-            {
-                return OAuthError(ex);
-            }
-            catch (FluentValidation.ValidationException ex)
-            {
-                return OAuthError(new OAuthProtocolException(OAuthErrors.InvalidRequest, string.Join(" ", ex.Errors.Select(e => e.ErrorMessage).Distinct())));
-            }
+        OAuthTokenResponse result;
+        try
+        {
+            result = await _mediator.Send(new ExchangeOAuthCodeCommand(tokenRequest), cancellationToken);
+        }
+        catch (OAuthProtocolException ex) when (isForm)
+        {
+            return OAuthError(ex);
+        }
+        catch (FluentValidation.ValidationException ex) when (isForm)
+        {
+            return OAuthError(new OAuthProtocolException(OAuthErrors.InvalidRequest, string.Join(" ", ex.Errors.Select(e => e.ErrorMessage).Distinct())));
         }
 
+        if (!isForm)
+            return OkResponse(result);
+
+        return Ok(new Dictionary<string, object?>
+        {
+            ["access_token"] = result.AccessToken,
+            ["token_type"] = result.TokenType,
+            ["expires_in"] = result.ExpiresIn,
+            ["refresh_token"] = result.RefreshToken,
+            ["scope"] = string.Join(' ', result.Scopes),
+            ["id_token"] = result.IdToken
+        }.Where(kv => kv.Value is not null).ToDictionary(kv => kv.Key, kv => kv.Value));
+    }
+
+    private async Task<OAuthTokenRequest> ReadFormTokenRequestAsync(CancellationToken cancellationToken)
+    {
+        var form = await Request.ReadFormAsync(cancellationToken);
+        return new OAuthTokenRequest(
+            form["grant_type"].ToString(),
+            form["client_id"].ToString(),
+            form["redirect_uri"].ToString(),
+            NullIfEmpty(form["client_secret"].ToString()),
+            NullIfEmpty(form["code"].ToString()),
+            NullIfEmpty(form["code_verifier"].ToString()),
+            NullIfEmpty(form["refresh_token"].ToString()));
+    }
+
+    private async Task<OAuthTokenRequest> ReadJsonTokenRequestAsync(CancellationToken cancellationToken)
+    {
         var body = await Request.ReadFromJsonAsync<OAuthTokenApiRequest>(cancellationToken)
                    ?? throw new OAuthProtocolException(OAuthErrors.InvalidRequest, "Request body is required.");
-        var jsonRequest = new OAuthTokenRequest(
+        return new OAuthTokenRequest(
             body.GrantType,
             body.ClientId,
             body.RedirectUri,
@@ -145,12 +165,13 @@ public class OAuthController : ApiControllerBase
             body.Code,
             body.CodeVerifier,
             body.RefreshToken);
-        var jsonResult = await _mediator.Send(new ExchangeOAuthCodeCommand(jsonRequest), cancellationToken);
-        return OkResponse(jsonResult);
     }
 
-    /// <summary>OpenID Connect UserInfo endpoint (claims depend on the granted scopes).</summary>
-    [Authorize]
+    /// <summary>
+    /// OpenID Connect UserInfo endpoint (claims depend on the granted scopes). It is the only endpoint that also
+    /// accepts access tokens issued to third-party clients.
+    /// </summary>
+    [Authorize(AuthenticationSchemes = AuthenticationServiceExtensions.PlatformOrOAuthClientSchemes)]
     [HttpGet("userinfo")]
     [HttpPost("userinfo")]
     public async Task<IActionResult> UserInfo(CancellationToken cancellationToken = default)

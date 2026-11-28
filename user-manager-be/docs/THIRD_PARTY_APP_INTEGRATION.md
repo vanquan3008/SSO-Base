@@ -12,7 +12,11 @@ GET {API}/.well-known/openid-configuration
 In the console go to **Applications → New application**:
 
 - **Client type**: *public* (SPA / mobile, no secret) or *confidential* (server-side, with a secret that is shown once).
-- **Redirect URIs**: exact matches only. Use HTTPS outside local development.
+- **Redirect URIs**: compared character for character (no trailing-slash, case or query-string tolerance) and must
+  not contain a fragment. Use HTTPS; plain HTTP is accepted only on loopback, and loopback IP literals
+  (`http://127.0.0.1/cb`) may use any port. A client without registered redirect URIs cannot sign users in.
+  You can change the list later on the application's page (**Client configuration → Edit**) or with
+  `PUT /api/applications/{applicationId}/redirect-uris` and `{ "redirectUris": ["https://…"] }`.
 - **Back-channel logout URI** (optional): this endpoint receives logout tokens when the user's SSO session ends.
 - Add the users who may sign in as **members**, each with an application role and an active subscription.
   Sign-in is refused for anyone who is not a member.
@@ -65,6 +69,8 @@ Codes expire after 2 minutes and can be used once. Presenting a used code again 
 ## 5. Use and refresh tokens
 
 - Call `userinfo_endpoint` with `Authorization: Bearer <access_token>`. It returns claims for the granted scopes.
+- The access token is an RS256 JWT with `typ: at+jwt`, `aud` = your client id and `client_id` = your client id.
+  Your own API can validate it like an ID token. It is **not** accepted by the SSO platform API (only by UserInfo).
 - Refresh with `grant_type=refresh_token&refresh_token=…&client_id=…` plus client authentication. Each refresh
   returns a **new** refresh token, so store it and discard the old one. Presenting a rotated refresh token again is
   treated as theft and revokes the whole token family.

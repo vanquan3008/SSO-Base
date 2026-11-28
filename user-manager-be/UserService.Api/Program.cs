@@ -13,6 +13,12 @@ try
     builder.Host.UseCustomSerilog();
     var appSettings = new AppSettings();
     builder.Configuration.GetSection(AppSettings.SectionName).Bind(appSettings);
+    if (appSettings.OAuth.FirstPartyClientIds.Length == 0 &&
+        builder.Configuration["SEED_APP_API_KEY"] is { Length: > 0 } seededClientId)
+    {
+        // The seeded admin console is the first-party client unless configured otherwise.
+        appSettings.OAuth.FirstPartyClientIds = new[] { seededClientId };
+    }
 
     builder.Services.AddApplicationServices();
     builder.Services.AddInfrastructureServices(appSettings);                  
