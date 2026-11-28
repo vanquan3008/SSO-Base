@@ -1,7 +1,8 @@
 using MediatR;
-using Microsoft.Extensions.Logging;
 using UserService.Application.Features.Auth.Commands;
+using UserService.Application.Interfaces.Services.Security;
 using UserService.Application.Services;
+using UserService.Domain.Entities;
 using UserService.Domain.Exceptions;
 
 namespace UserService.Application.Features.Auth.Handlers;
@@ -9,21 +10,24 @@ namespace UserService.Application.Features.Auth.Handlers;
 public class ChangePasswordCommandHandler : IRequestHandler<ChangePasswordCommand, Unit>
 {
     private readonly IIdentityService _identityService;
-    private readonly ILogger<ChangePasswordCommandHandler> _logger;
+    private readonly ISessionService _sessions;
+    private readonly IRequestContext _requestContext;
+    private readonly IAuditLogger _audit;
 
     public ChangePasswordCommandHandler(
         IIdentityService identityService,
-        ILogger<ChangePasswordCommandHandler> logger
-    )
+        ISessionService sessions,
+        IRequestContext requestContext,
+        IAuditLogger audit)
     {
         _identityService = identityService;
-        _logger = logger;
+        _sessions = sessions;
+        _requestContext = requestContext;
+        _audit = audit;
     }
 
     public async Task<Unit> Handle(ChangePasswordCommand command, CancellationToken cancellationToken)
     {
-        _logger.LogInformation("Changing password for user {UserId}", command.UserId);
-
         var succeeded = await _identityService.ChangePasswordAsync(
             command.UserId,
             command.CurrentPassword,
@@ -32,11 +36,13 @@ public class ChangePasswordCommandHandler : IRequestHandler<ChangePasswordComman
 
         if (!succeeded)
         {
-            _logger.LogWarning("Failed to change password for user {UserId}", command.UserId);
+            await _audit.LogAsync(AuditEventTypes.PasswordChanged, false, new AuditEntry(ActorUserId: command.UserId), cancellationToken);
             throw new BusinessRuleValidationException("ChangePasswordFailed", "Failed to change password. Verify your current password is correct.");
         }
 
-        _logger.LogInformation("Password changed for user {UserId}", command.UserId);
+        // Sign out every other device; the current session stays signed in.
+        var revoked = await _sessions.RevokeAllAsync(command.UserId, SessionRevocationReasons.PasswordChanged, _requestContext.SessionId, cancellationToken);
+        await _audit.LogAsync(AuditEventTypes.PasswordChanged, true, new AuditEntry(ActorUserId: command.UserId, Details: new { revokedSessions = revoked }), cancellationToken);
         return Unit.Value;
     }
 }

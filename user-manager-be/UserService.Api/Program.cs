@@ -13,6 +13,12 @@ try
     builder.Host.UseCustomSerilog();
     var appSettings = new AppSettings();
     builder.Configuration.GetSection(AppSettings.SectionName).Bind(appSettings);
+    if (appSettings.OAuth.FirstPartyClientIds.Length == 0 &&
+        builder.Configuration["SEED_APP_API_KEY"] is { Length: > 0 } seededClientId)
+    {
+        // The seeded admin console is the first-party client unless configured otherwise.
+        appSettings.OAuth.FirstPartyClientIds = new[] { seededClientId };
+    }
 
     builder.Services.AddApplicationServices();
     builder.Services.AddInfrastructureServices(appSettings);                  
@@ -38,11 +44,15 @@ try
         Log.Information("Auto-migration is disabled. Skipping database migration and seeding.");
     }
     
+    // Load (or create on first start) the RS256 signing key ring before serving requests.
+    await app.Services.GetRequiredService<UserService.Application.Interfaces.Services.Security.ISigningKeyProvider>()
+        .EnsureInitializedAsync();
+
     app.UseApiPipeline(appSettings);
 
     app.Run();
 }
-catch (Exception ex) when (ex is not HostAbortedException)
+catch (Exception ex) when (ex is not HostAbortedException && ex.Source != "Microsoft.EntityFrameworkCore.Design")
 {
     Log.Fatal(ex, "Application terminated unexpectedly");
 }
@@ -50,3 +60,6 @@ finally
 {
     Log.CloseAndFlush();
 }
+
+/// <summary>Entry point marker for integration tests (WebApplicationFactory).</summary>
+public partial class Program;

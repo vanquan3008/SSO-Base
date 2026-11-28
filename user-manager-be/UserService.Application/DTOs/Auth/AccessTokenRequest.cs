@@ -2,7 +2,6 @@ namespace UserService.Application.DTOs.Auth;
 
 /// <summary>
 /// Immutable request object for generating an access token.
-/// Eliminates primitive parameter explosion in ITokenService and IClaimsFactory.
 /// </summary>
 public sealed record AccessTokenRequest(
     Guid UserId,
@@ -13,5 +12,23 @@ public sealed record AccessTokenRequest(
     Guid? ApplicationId = null,
     string? Scope = null,
     IEnumerable<Guid>? SSOAppIds = null,
-    IEnumerable<string>? OAuthScopes = null
+    IEnumerable<string>? OAuthScopes = null,
+    Guid? SessionId = null,
+    string? ClientId = null,
+    string? AuthenticationMethod = null,
+    string? Audience = null // "aud" claim; null means the platform API audience
 );
+
+/// <summary>Inputs for an OpenID Connect ID token (OIDC Core §2).</summary>
+public sealed record IdTokenRequest(
+    Guid UserId,
+    string ClientId,
+    string? Nonce,
+    Guid? SessionId,
+    DateTime AuthTime,
+    IReadOnlyCollection<string> Scopes,
+    string? Email,
+    bool EmailVerified,
+    string? Name,
+    string? PreferredUsername,
+    string? AuthenticationMethod);

@@ -9,17 +9,17 @@ import { ApplicationsService } from '../../core/services/applications.service';
 import { FileUploadService } from '../../core/services/file-upload.service';
 import { RolesService } from '../../core/services/roles.service';
 import { UsersService } from '../../core/services/users.service';
-import { ThemeService } from '../../core/services/theme.service';
+import { TranslateService } from '../../core/services/translate.service';
+import { apiErrorMessage } from '../../core/utils/http-error.utils';
+import { MAX_REDIRECT_URIS, isValidRedirectUri } from '../../core/utils/redirect-uri';
+import { formatDateTime } from '../../shared/utils/format';
 import { NotificationService } from '../../core/services/notification.service';
 import { ConfirmService } from '../../core/services/confirm.service';
 import { environment } from '../../../environments/environment';
 import { DrawerComponent } from '../../shared/components/drawer/drawer.component';
 import { DrawerFooterActionsComponent } from '../../shared/components/drawer-footer-actions/drawer-footer-actions.component';
-import { DropdownComponent } from '../../shared/components/dropdown/dropdown.component';
 import { PageToolbarService } from '../../core/services/page-toolbar.service';
-import { StatCardComponent } from '../../shared/components/stat-card/stat-card.component';
 import { LoadingStateComponent } from '../../shared/components/loading-state/loading-state.component';
-import { EmptyStateComponent } from '../../shared/components/empty-state/empty-state.component';
 import type {
   ApplicationCapabilitiesDto,
   ApplicationCredentialItem,
@@ -39,10 +39,7 @@ import type {
     FormsModule,
     DrawerComponent,
     DrawerFooterActionsComponent,
-    DropdownComponent,
-    StatCardComponent,
-    LoadingStateComponent,
-    EmptyStateComponent
+    LoadingStateComponent
   ],
   templateUrl: './application-detail.component.html'
 })
@@ -56,7 +53,47 @@ export class ApplicationDetailComponent implements OnInit {
   private readonly notify = inject(NotificationService);
   private readonly confirm = inject(ConfirmService);
   private readonly pageToolbar = inject(PageToolbarService);
-  readonly theme = inject(ThemeService).theme;
+  private readonly translate = inject(TranslateService);
+  readonly t = this.translate.t;
+  readonly removingUserId = signal<string | null>(null);
+  readonly integrationRows = computed(() => {
+    const api = (environment.apiUrl || '').replace(/\/$/, '');
+    const t = this.t();
+    return [
+      { label: t.sysDiscovery, value: `${api}/.well-known/openid-configuration` },
+      { label: t.adAuthorizeEndpoint, value: `${window.location.origin}/oauth/authorize` },
+      { label: t.adTokenEndpoint, value: `${api}/api/oauth/token` },
+      { label: t.sysJwks, value: `${api}/.well-known/jwks.json` }
+    ];
+  });
+
+  when(iso: string | null | undefined) { return formatDateTime(iso, this.translate.locale()); }
+
+  async removeMember(user: ApplicationUserDto) {
+    const app = this.app();
+    if (!app) return;
+    const ok = await this.confirm.confirm({
+      title: this.t().adRemoveMember,
+      message: this.t().adRemoveMemberConfirm.replace('{{user}}', this.getUserDisplayName(user)),
+      confirmText: this.t().adRemoveMember,
+      variant: 'danger'
+    });
+    if (!ok) return;
+    this.removingUserId.set(user.userId);
+    this.applicationsService.removeUserFromApplication(app.id, user.userId)
+      .pipe(takeUntilDestroyed(this.destroyRef))
+      .subscribe({
+        next: () => {
+          this.removingUserId.set(null);
+          this.appUsers.update(list => list.filter(u => u.userId !== user.userId));
+          this.notify.success(this.t().adMemberRemoved);
+        },
+        error: (err: unknown) => {
+          this.removingUserId.set(null);
+          this.notify.error(apiErrorMessage(err));
+        }
+      });
+  }
 
   readonly app = signal<ApplicationListItem | null>(null);
   readonly credentials = signal<ApplicationCredentialItem | null>(null);
@@ -80,17 +117,54 @@ export class ApplicationDetailComponent implements OnInit {
   readonly closingAddRole = signal(false);
   readonly updatingLogo = signal(false);
   readonly rotatingSecret = signal(false);
+  readonly showClientSecret = signal(false);
   readonly selectedGlobalRoleId = signal('');
+  readonly editingRedirects = signal(false);
+  readonly redirectDraft = signal<string[]>([]);
+  readonly savingRedirects = signal(false);
+  readonly maxRedirectUris = MAX_REDIRECT_URIS;
   readonly defaultAppLogoDataUri = environment.defaultAppLogoDataUri;
 
   readonly totalUsers = computed(() => this.appUsers().length);
   readonly totalRoles = computed(() => this.appRoles().length);
   readonly ownerLabel = computed(() => this.app()?.ownerDisplayName?.trim() || this.app()?.ownerId?.trim() || 'Unassigned');
+  readonly clientTypeLabel = computed(() => this.credentials()?.clientType || this.app()?.clientType || 'Public');
   readonly redirectUris = computed(() =>
     this.parseDelimitedValues(this.credentials()?.allowedRedirectUris || this.app()?.allowedRedirectUris || '')
   );
+  readonly redirectHosts = computed(() =>
+    Array.from(
+      new Set(
+        this.redirectUris().map((uri) => {
+          try {
+            return new URL(uri).host;
+          } catch {
+            return uri;
+          }
+        })
+      )
+    )
+  );
+  /** Credentials are only readable with the manage-applications permission, which the update endpoint also requires. */
+  readonly canEditRedirects = computed(() => !!this.credentials());
+  readonly redirectDraftErrors = computed(() => {
+    const t = this.t();
+    const seen = new Set<string>();
+    return this.redirectDraft().map((raw) => {
+      const value = raw.trim();
+      if (!value) return '';
+      if (!isValidRedirectUri(value)) return t.adRedirectInvalid;
+      if (seen.has(value)) return t.adRedirectDuplicate;
+      seen.add(value);
+      return '';
+    });
+  });
+  readonly redirectDraftValid = computed(() => this.redirectDraftErrors().every((error) => !error));
+  readonly primaryRedirectHost = computed(() => this.redirectHosts()[0] || 'No redirect host');
   readonly capabilityFeatureCount = computed(() => this.capabilities()?.enabledFeatures.length ?? 0);
   readonly capabilityPermissionCount = computed(() => this.capabilities()?.enabledPermissions.length ?? 0);
+  readonly visibleClientSecret = computed(() => !!this.credentials()?.clientSecret?.trim());
+  readonly hasBackchannelLogout = computed(() => !!(this.credentials()?.backchannelLogoutUri || this.app()?.backchannelLogoutUri || '').trim());
   readonly userOptions = computed(() => [
     { value: '', label: '-- Select user --' },
     ...this.apiUsers().map(user => ({ value: user.id, label: this.getUserLabel(user) }))
@@ -140,6 +214,7 @@ export class ApplicationDetailComponent implements OnInit {
             return;
           }
 
+          this.showClientSecret.set(false);
           this.app.set(app.data);
           this.credentials.set(credentials?.success ? credentials.data : null);
           this.capabilities.set(capabilities);
@@ -295,6 +370,75 @@ export class ApplicationDetailComponent implements OnInit {
 
   getUserInitial(user: ApplicationUserDto): string {
     return this.getUserDisplayName(user).charAt(0).toUpperCase();
+  }
+
+  getAppInitials(): string {
+    const name = this.app()?.name?.trim() || '';
+    if (!name) return 'AP';
+
+    const parts = name
+      .split(/[\s-_]+/)
+      .map((part) => part.trim())
+      .filter(Boolean);
+
+    if (parts.length === 1) {
+      return parts[0].slice(0, 2).toUpperCase();
+    }
+
+    return `${parts[0][0] ?? ''}${parts[1][0] ?? ''}`.toUpperCase();
+  }
+
+  getSecretStatusLabel(): string {
+    if (this.clientTypeLabel().toLowerCase() !== 'confidential') {
+      return 'PKCE only';
+    }
+
+    if (this.visibleClientSecret()) {
+      return 'New secret ready';
+    }
+
+    if (this.credentials()?.lastClientSecretRotatedAt) {
+      return 'Managed secret';
+    }
+
+    return 'Needs rotation';
+  }
+
+  getSecretStatusDescription(): string {
+    if (this.clientTypeLabel().toLowerCase() !== 'confidential') {
+      return 'Public clients authenticate with PKCE and do not store a client secret.';
+    }
+
+    if (this.visibleClientSecret()) {
+      return 'This one-time value is visible now. Copy it before leaving the page.';
+    }
+
+    if (this.credentials()?.lastClientSecretRotatedAt) {
+      return 'The secret exists server-side, but its raw value is no longer readable from this screen.';
+    }
+
+    return 'Rotate once to reveal a fresh secret value for integrations.';
+  }
+
+  displayClientSecret(): string {
+    const value = this.credentials()?.clientSecret?.trim() || '';
+    if (!value) {
+      return 'Stored server-side only. Rotate to issue a fresh one-time value.';
+    }
+
+    if (this.showClientSecret()) {
+      return value;
+    }
+
+    return `${value.slice(0, 4)}${'•'.repeat(Math.max(12, value.length - 8))}${value.slice(-4)}`;
+  }
+
+  toggleClientSecretVisibility() {
+    if (!this.visibleClientSecret()) {
+      return;
+    }
+
+    this.showClientSecret.update((value) => !value);
   }
 
   private parseDelimitedValues(raw: string): string[] {
@@ -508,11 +652,80 @@ export class ApplicationDetailComponent implements OnInit {
           }
 
           this.credentials.set(response.data);
+          this.showClientSecret.set(false);
           this.notify.success('Client secret rotated. Copy the new value now.');
         },
         error: (err: any) => {
           this.notify.error(err.error?.message || 'Failed to rotate client secret.');
         }
+      });
+  }
+
+  startEditRedirects() {
+    this.redirectDraft.set(this.redirectUris().length ? [...this.redirectUris()] : ['']);
+    this.editingRedirects.set(true);
+  }
+
+  cancelEditRedirects() {
+    this.editingRedirects.set(false);
+    this.redirectDraft.set([]);
+  }
+
+  addRedirectRow() {
+    if (this.redirectDraft().length >= MAX_REDIRECT_URIS) return;
+    this.redirectDraft.update((rows) => [...rows, '']);
+  }
+
+  updateRedirectRow(index: number, value: string) {
+    this.redirectDraft.update((rows) => rows.map((row, i) => (i === index ? value : row)));
+  }
+
+  removeRedirectRow(index: number) {
+    this.redirectDraft.update((rows) => rows.filter((_, i) => i !== index));
+  }
+
+  async saveRedirects() {
+    const app = this.app();
+    if (!app || !this.redirectDraftValid()) return;
+
+    const redirectUris = Array.from(new Set(this.redirectDraft().map((row) => row.trim()).filter(Boolean)));
+    if (redirectUris.length > MAX_REDIRECT_URIS) {
+      this.notify.error(this.t().adRedirectsTooMany);
+      return;
+    }
+
+    if (!redirectUris.length) {
+      const confirmed = await this.confirm.confirm({
+        title: this.t().adRedirectsEmptyTitle,
+        message: this.t().adRedirectsEmptyConfirm,
+        confirmText: this.t().save,
+        cancelText: this.t().cancel,
+        variant: 'danger'
+      });
+      if (!confirmed) return;
+    }
+
+    this.savingRedirects.set(true);
+    this.applicationsService.updateApplicationRedirectUris(app.id, redirectUris)
+      .pipe(
+        finalize(() => this.savingRedirects.set(false)),
+        takeUntilDestroyed(this.destroyRef)
+      )
+      .subscribe({
+        next: (response) => {
+          if (!response.success || !response.data) {
+            this.notify.error(response.message || apiErrorMessage(null));
+            return;
+          }
+
+          // Merge only the URIs: the response never carries a client secret, and a freshly rotated one may be on screen.
+          const allowedRedirectUris = response.data.allowedRedirectUris;
+          this.credentials.update((current) => (current ? { ...current, allowedRedirectUris } : response.data));
+          this.app.update((current) => (current ? { ...current, allowedRedirectUris } : current));
+          this.editingRedirects.set(false);
+          this.notify.success(this.t().adRedirectsSaved);
+        },
+        error: (err: unknown) => this.notify.error(apiErrorMessage(err))
       });
   }
 

@@ -1,101 +1,60 @@
-import { CommonModule } from '@angular/common';
-import { Component, input, output } from '@angular/core';
+import { Component, computed, inject, input, output } from '@angular/core';
 import { FormsModule } from '@angular/forms';
-import { DropdownComponent, type DropdownOption } from '../../../shared/components/dropdown/dropdown.component';
-import { EmptyStateComponent } from '../../../shared/components/empty-state/empty-state.component';
+import { TranslateService } from '../../../core/services/translate.service';
+import type { DropdownOption } from '../../../shared/components/dropdown/dropdown.component';
 
 @Component({
   selector: 'app-user-role-management',
   standalone: true,
-  imports: [CommonModule, FormsModule, DropdownComponent, EmptyStateComponent],
+  imports: [FormsModule],
   template: `
-    <div class="grid gap-6 xl:grid-cols-[minmax(0,0.95fr)_minmax(0,1.4fr)]">
-      <section class="rounded-3xl border p-5 shadow-sm" [ngClass]="surfaceClasses()">
-        <div class="mb-4 flex items-center justify-between gap-3">
-          <div>
-            <h3 class="text-base font-semibold" [ngClass]="theme() === 'light' ? 'text-slate-950' : 'text-white'">Add global role</h3>
-            <p class="mt-1 text-sm" [ngClass]="theme() === 'light' ? 'text-slate-600' : 'text-slate-400'">
-              Assign a new platform role without leaving this screen.
-            </p>
+    <section class="card">
+      <div class="card-header"><div><h2 class="card-title">{{ t().udRoles }}</h2><p class="card-desc">{{ t().udRolesDesc }}</p></div></div>
+      <div class="card-body space-y-4">
+        <ul class="flex flex-wrap gap-2">
+          @for (role of sortedRoles(); track role) {
+            <li class="inline-flex items-center gap-1 rounded-lg border border-line bg-surface-2 py-1 pl-2.5 pr-1 text-[13px] font-medium">
+              <span class="material-symbols-outlined text-[16px] text-fg-3">{{ isPrivileged(role) ? 'admin_panel_settings' : 'person' }}</span>{{ role }}
+              <button type="button" class="btn-icon-sm h-6 w-6" (click)="removeRole.emit(role)" [disabled]="removingRole() === role" [attr.aria-label]="t().udRemoveRole + ' ' + role">
+                @if (removingRole() === role) { <span class="spinner h-3 w-3"></span> } @else { <span class="material-symbols-outlined text-[16px]">close</span> }
+              </button>
+            </li>
+          } @empty {
+            <li class="text-[13px] text-fg-3">{{ t().udNoRoles }}</li>
+          }
+        </ul>
+        @if (roleOptions().length) {
+          <div class="flex flex-wrap gap-2">
+            <select class="input w-auto min-w-[200px]" [ngModel]="selectedRole()" (ngModelChange)="selectedRoleChange.emit($event)" [attr.aria-label]="t().udSelectRole">
+              <option value="">{{ t().udSelectRole }}</option>
+              @for (o of roleOptions(); track o.value) { <option [value]="o.value">{{ o.label }}</option> }
+            </select>
+            <button type="button" class="btn-secondary" (click)="addRole.emit()" [disabled]="!selectedRole() || addingRole()">
+              @if (addingRole()) { <span class="spinner"></span> } @else { <span class="material-symbols-outlined">add</span> }{{ t().udAddRole }}
+            </button>
           </div>
-        </div>
-
-        <div class="space-y-3">
-          <app-dropdown
-            [options]="roleOptions()"
-            [placeholder]="roleOptions().length ? 'Select a role' : 'No roles available'"
-            [theme]="theme()"
-            [disabled]="!roleOptions().length || addingRole()"
-            [ngModel]="selectedRole()"
-            (ngModelChange)="selectedRoleChange.emit($event)"
-          />
-          <button
-            type="button"
-            class="inline-flex w-full items-center justify-center gap-2 rounded-2xl bg-sky-500 px-4 py-3 text-sm font-semibold text-white transition duration-200 hover:-translate-y-px hover:bg-sky-600 disabled:cursor-not-allowed disabled:opacity-60"
-            [disabled]="!selectedRole() || addingRole()"
-            (click)="addRole.emit()"
-          >
-            <span class="material-symbols-outlined text-lg">add</span>
-            {{ addingRole() ? 'Adding role...' : 'Add role' }}
-          </button>
-        </div>
-      </section>
-
-      <section class="rounded-3xl border p-6 shadow-sm" [ngClass]="surfaceClasses()">
-        <div class="mb-5 flex items-center justify-between gap-3">
-          <div>
-            <h3 class="text-lg font-semibold" [ngClass]="theme() === 'light' ? 'text-slate-950' : 'text-white'">Current roles</h3>
-            <p class="mt-1 text-sm" [ngClass]="theme() === 'light' ? 'text-slate-600' : 'text-slate-400'">
-              Remove access that is no longer appropriate.
-            </p>
-          </div>
-        </div>
-
-        @if (roles().length) {
-          <div class="grid gap-3 md:grid-cols-2">
-            @for (role of roles(); track role) {
-              <div
-                class="group flex items-center justify-between gap-4 rounded-2xl border px-4 py-4 transition duration-200 hover:-translate-y-px"
-                [ngClass]="theme() === 'light' ? 'border-slate-200 bg-slate-50 hover:border-sky-200' : 'border-slate-800 bg-slate-950/70 hover:border-sky-500/30'"
-              >
-                <div>
-                  <p class="font-semibold" [ngClass]="theme() === 'light' ? 'text-slate-950' : 'text-white'">{{ role }}</p>
-                  <p class="mt-1 text-xs" [ngClass]="theme() === 'light' ? 'text-slate-500' : 'text-slate-400'">Global role assignment</p>
-                </div>
-                <button
-                  type="button"
-                  class="inline-flex items-center justify-center rounded-xl border px-3 py-2 text-xs font-semibold transition duration-200 hover:-translate-y-px disabled:cursor-not-allowed disabled:opacity-60"
-                  [ngClass]="theme() === 'light' ? 'border-rose-200 bg-rose-50 text-rose-700 hover:bg-rose-100' : 'border-rose-500/30 bg-rose-500/10 text-rose-100 hover:bg-rose-500/20'"
-                  [disabled]="removingRole() === role"
-                  (click)="removeRole.emit(role)"
-                >
-                  {{ removingRole() === role ? 'Removing...' : 'Remove' }}
-                </button>
-              </div>
-            }
-          </div>
-        } @else {
-          <app-empty-state message="No global roles assigned yet." [theme]="theme()" />
         }
-      </section>
-    </div>
+      </div>
+    </section>
   `
 })
 export class UserRoleManagementComponent {
+  readonly t = inject(TranslateService).t;
+
   roles = input.required<string[]>();
   roleOptions = input.required<DropdownOption[]>();
   selectedRole = input.required<string>();
   addingRole = input<boolean>(false);
   removingRole = input<string | null>(null);
+  /** @deprecated kept for template compatibility */
   theme = input<'light' | 'dark'>('dark');
 
   selectedRoleChange = output<string>();
   addRole = output<void>();
   removeRole = output<string>();
 
-  surfaceClasses() {
-    return this.theme() === 'light'
-      ? 'border-slate-200 bg-white/90'
-      : 'border-slate-700 bg-slate-900/70';
-  }
+  private readonly order = ['superadmin', 'admin', 'user', 'guest'];
+  sortedRoles = computed(() => [...this.roles()].sort((a, b) => this.rank(a) - this.rank(b) || a.localeCompare(b)));
+  isPrivileged(role: string) { return this.rank(role) <= 1; }
+  private rank(role: string) { const i = this.order.indexOf(role.toLowerCase()); return i < 0 ? 99 : i; }
 }

@@ -1,6 +1,7 @@
 using UserService.Application.Interfaces.Services;
 using UserService.Application.DTOs.Applications;
 using UserService.Application.Features.Applications.Commands;
+using UserService.Application.Features.OAuth.Policies;
 using UserService.Application.Mapping;
 using UserService.Domain.Constants;
 using UserService.Domain.Entities;
@@ -13,6 +14,10 @@ namespace UserService.Application.Services;
 
 public sealed class ApplicationAppService : IApplicationAppService
 {
+    private const int MaxRedirectUris = 20;
+    private const int MaxRedirectUrisStorageLength = 2000; // AppApplications.AllowedRedirectUris column length
+    private static readonly char[] RedirectUriSeparators = { ',', '\r', '\n' };
+
     private readonly IApplicationRepository _applications;
     private readonly IApplicationCacheService _applicationCache;
     private readonly IUserRepository _users;
@@ -21,6 +26,8 @@ public sealed class ApplicationAppService : IApplicationAppService
     private readonly IHashingService _hashingService;
     private readonly IClock _clock;
     private readonly IUnitOfWork _unitOfWork;
+    private readonly IOAuthRedirectUriPolicy _redirectUriPolicy;
+    private readonly AppSettings _appSettings;
 
     public ApplicationAppService(
         IApplicationRepository applications,
@@ -30,7 +37,9 @@ public sealed class ApplicationAppService : IApplicationAppService
         IApplicationMembershipService applicationMembershipService,
         IHashingService hashingService,
         IClock clock,
-        IUnitOfWork unitOfWork)
+        IUnitOfWork unitOfWork,
+        IOAuthRedirectUriPolicy redirectUriPolicy,
+        AppSettings appSettings)
     {
         _applications = applications;
         _applicationCache = applicationCache;
@@ -40,6 +49,8 @@ public sealed class ApplicationAppService : IApplicationAppService
         _hashingService = hashingService;
         _clock = clock;
         _unitOfWork = unitOfWork;
+        _redirectUriPolicy = redirectUriPolicy;
+        _appSettings = appSettings;
     }
 
     public Task<AppApplication?> GetByIdAsync(Guid id, CancellationToken cancellationToken = default)
@@ -87,13 +98,7 @@ public sealed class ApplicationAppService : IApplicationAppService
             app.RotateClientSecret(secretHash, _clock.UtcNow);
 
         if (!string.IsNullOrWhiteSpace(command.AllowedRedirectUris))
-        {
-            foreach (var uri in command.AllowedRedirectUris
-                .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
-            {
-                app.AddRedirectUri(UrlValue.Create(uri));
-            }
-        }
+            app.ReplaceRedirectUris(ParseRedirectUris(command.AllowedRedirectUris.Split(RedirectUriSeparators)));
 
         if (!string.IsNullOrWhiteSpace(command.BackchannelLogoutUri))
             app.SetBackchannelLogoutUri(UrlValue.Create(command.BackchannelLogoutUri.Trim()));
@@ -161,6 +166,61 @@ public sealed class ApplicationAppService : IApplicationAppService
         await _unitOfWork.SaveChangesAsync(cancellationToken);
 
         return ApplicationEntityMapper.ToCredentialDto(app, plainClientSecret);
+    }
+
+    public async Task<ApplicationCredentialDto> UpdateRedirectUrisAsync(
+        Guid applicationId,
+        IReadOnlyCollection<string> redirectUris,
+        CancellationToken cancellationToken = default)
+    {
+        var app = await _applications.GetByIdAsync(applicationId, cancellationToken)
+                  ?? throw new ApplicationInactiveException(applicationId);
+
+        var parsed = ParseRedirectUris(redirectUris);
+        if (parsed.Count == 0 && _appSettings.OAuth.IsFirstPartyClient(app.ApiKey.Value))
+        {
+            throw new BusinessRuleValidationException(
+                "RedirectUriRequired",
+                "The administration console needs at least one redirect URI, otherwise nobody can sign in to it.");
+        }
+
+        app.ReplaceRedirectUris(parsed);
+        await _applications.UpdateAsync(app, cancellationToken);
+        await _unitOfWork.SaveChangesAsync(cancellationToken);
+
+        return ApplicationEntityMapper.ToCredentialDto(app);
+    }
+
+    /// <summary>
+    /// Trims, de-duplicates and validates redirect URIs against the OAuth policy. The list is stored as one
+    /// comma-separated column, so commas are rejected and the total length is capped.
+    /// </summary>
+    private IReadOnlyList<UrlValue> ParseRedirectUris(IEnumerable<string?> values)
+    {
+        var uris = values
+            .Select(value => value?.Trim())
+            .Where(value => !string.IsNullOrEmpty(value))
+            .Select(value => value!)
+            .Distinct(StringComparer.Ordinal)
+            .ToList();
+
+        if (uris.Count > MaxRedirectUris)
+            throw new BusinessRuleValidationException("TooManyRedirectUris", $"At most {MaxRedirectUris} redirect URIs can be registered.");
+
+        foreach (var uri in uris)
+        {
+            if (uri.Contains(',') || !_redirectUriPolicy.IsWellFormed(uri))
+            {
+                throw new BusinessRuleValidationException(
+                    "InvalidRedirectUri",
+                    $"Redirect URI '{uri}' must be an absolute HTTPS URI (HTTP only on loopback) without a fragment, user info or comma.");
+            }
+        }
+
+        if (uris.Sum(uri => uri.Length + 1) - 1 > MaxRedirectUrisStorageLength)
+            throw new BusinessRuleValidationException("RedirectUrisTooLong", $"Redirect URIs may not exceed {MaxRedirectUrisStorageLength} characters in total.");
+
+        return uris.Select(UrlValue.Create).ToList();
     }
 
     public async Task<AppApplication?> UpdateLogoUrlAsync(Guid id, string? logoUrl, CancellationToken cancellationToken = default)

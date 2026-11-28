@@ -65,16 +65,22 @@ public class ExceptionHandlingMiddleware(
             return true;
         }
 
+        // A dead refresh token must not linger in the browser; a superseded one (multi-tab race) is kept
+        // because the browser already holds the newer cookie.
         if (context.Request.Path.StartsWithSegments("/api/auth/refresh") &&
-            (exception is UnauthorizedAccessException or DomainAuthException))
+            (exception is UnauthorizedAccessException or DomainAuthException or UnauthorizedException ||
+             exception is AuthenticationFlowException { Code: not AuthErrorCodes.RefreshTokenSuperseded }))
         {
-            context.Response.Cookies.Delete(AuthCookieNames.RefreshToken, new CookieOptions
+            foreach (var path in new[] { "/api/auth", "/" })
             {
-                HttpOnly = true,
-                Secure = context.Request.IsHttps,
-                SameSite = context.Request.IsHttps ? SameSiteMode.None : SameSiteMode.Lax,
-                Path = "/"
-            });
+                context.Response.Cookies.Delete(AuthCookieNames.RefreshToken, new CookieOptions
+                {
+                    HttpOnly = true,
+                    Secure = context.Request.IsHttps,
+                    SameSite = context.Request.IsHttps ? SameSiteMode.None : SameSiteMode.Lax,
+                    Path = path
+                });
+            }
         }
 
         return false;
@@ -86,7 +92,14 @@ public class ExceptionHandlingMiddleware(
         var message = GetSafeErrorMessage(exception);
         var requestId = context.Items["RequestId"]?.ToString() ?? context.TraceIdentifier;
 
-        var error = new ErrorDetail(exception.GetType().Name, message, GetValidationErrors(exception));
+        var code = exception switch
+        {
+            AuthenticationFlowException flow => flow.Code,
+            OAuthProtocolException oauth => oauth.Error,
+            BusinessRuleValidationException rule when rule.RuleName != "Unknown" => rule.RuleName,
+            _ => exception.GetType().Name
+        };
+        var error = new ErrorDetail(code, message, GetValidationErrors(exception));
 
         var response = new ApiResponse<object>(false, null, title, error);
 
@@ -95,26 +108,6 @@ public class ExceptionHandlingMiddleware(
 
     private static IDictionary<string, string[]>? GetValidationErrors(Exception exception)
     {
-        if (exception is SSOLoginRequiredException sso)
-        {
-            var errors = new Dictionary<string, string[]>(StringComparer.OrdinalIgnoreCase)
-            {
-                ["email"] = new[] { sso.Email }
-            };
-
-            if (sso.ApplicationId.HasValue)
-            {
-                errors["applicationId"] = new[] { sso.ApplicationId.Value.ToString() };
-            }
-
-            if (!string.IsNullOrWhiteSpace(sso.ReturnUrl))
-            {
-                errors["returnUrl"] = new[] { sso.ReturnUrl };
-            }
-
-            return errors;
-        }
-
         if (exception is FluentValidationException fv)
         {
             return fv.Errors
@@ -142,15 +135,19 @@ public class ExceptionHandlingMiddleware(
             RoleAlreadyExistsException => (HttpStatusCode.BadRequest, "Role Already Exists"),
             InvalidDomainObjectException => (HttpStatusCode.BadRequest, "Invalid Domain Object"),
             DomainAuthException => (HttpStatusCode.Unauthorized, "Authentication Failed"),
+            AuthenticationFlowException => (HttpStatusCode.Unauthorized, "Authentication Failed"),
+            UnauthorizedException => (HttpStatusCode.Unauthorized, "Unauthorized"),
+            OAuthProtocolException { Error: OAuthErrors.InvalidClient } => (HttpStatusCode.Unauthorized, "Invalid Client"),
+            OAuthProtocolException => (HttpStatusCode.BadRequest, "OAuth Error"),
+            ConcurrencyConflictException => (HttpStatusCode.Conflict, "Conflict"),
             DuplicateUserException => (HttpStatusCode.Conflict, "User Already Exists"),
             BusinessRuleValidationException => (HttpStatusCode.UnprocessableEntity, "Business Rule Violation"),
             DomainOperationNotAllowedException => (HttpStatusCode.Forbidden, "Operation Not Allowed"),
-            SSOLoginRequiredException => (HttpStatusCode.Unauthorized, "SSO Login Required"),
             UnauthorizedAccessException => (HttpStatusCode.Unauthorized, "Unauthorized"),
             ArgumentNullException => (HttpStatusCode.InternalServerError, "Internal Server Error"),
             ArgumentException => (HttpStatusCode.InternalServerError, "Internal Server Error"),
             InvalidOperationException => (HttpStatusCode.InternalServerError, "Internal Server Error"),
-            KeyNotFoundException => (HttpStatusCode.InternalServerError, "Internal Server Error"),
+            KeyNotFoundException => (HttpStatusCode.NotFound, "Resource Not Found"),
             FileNotFoundException => (HttpStatusCode.InternalServerError, "Internal Server Error"),
             InvalidDataException => (HttpStatusCode.InternalServerError, "Internal Server Error"),
             TimeoutException => (HttpStatusCode.RequestTimeout, "Request Timeout"),
@@ -168,6 +165,10 @@ public class ExceptionHandlingMiddleware(
         {
             return exception.Message;
         }
+        if (exception is KeyNotFoundException)
+        {
+            return exception.Message;
+        }
         if (exception is FluentValidationException validationException)
         {
             return string.Join("; ", validationException.Errors.Select(error => error.ErrorMessage).Distinct());
@@ -176,7 +177,6 @@ public class ExceptionHandlingMiddleware(
         {
             return exception switch
             {
-                SSOLoginRequiredException => exception.Message,
                 UnauthorizedAccessException => "You are not authorized to access this resource.",
                 TimeoutException or TaskCanceledException => "The request took too long to process.",
                 _ => "An error occurred while processing your request."

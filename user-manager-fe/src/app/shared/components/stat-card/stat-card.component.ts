@@ -1,45 +1,40 @@
 import { Component, input } from '@angular/core';
-import { CommonModule } from '@angular/common';
+import { NgTemplateOutlet } from '@angular/common';
+import { RouterLink } from '@angular/router';
 
+/** KPI tile. With `link` set the whole tile navigates to the page that explains the number. */
 @Component({
   selector: 'app-stat-card',
   standalone: true,
-  imports: [CommonModule],
+  imports: [RouterLink, NgTemplateOutlet],
   template: `
-    <div
-      class="motion-card group relative flex flex-col overflow-hidden rounded-xl border transition-all duration-300 hover:-translate-y-1 hover:shadow-xl"
-      [ngClass]="cardClasses()"
-    >
-      <div
-        class="pointer-events-none absolute inset-x-0 top-0 h-20 bg-gradient-to-br opacity-80 transition duration-300 group-hover:opacity-100"
-        [ngClass]="theme() === 'light'
-          ? 'from-white/60 via-sky-50/40 to-transparent'
-          : 'from-white/5 via-sky-400/5 to-transparent'"
-      ></div>
-      <div class="relative flex flex-col gap-3 p-5">
-        <div class="flex items-center justify-between">
-          @if (icon()) {
-            <span
-              class="material-symbols-outlined rounded-lg p-2 text-2xl"
-              [ngClass]="theme() === 'light' ? iconLightClass() : 'text-slate-400'"
-            >
-              {{ icon() }}
-            </span>
-          }
-          <span class="max-w-[70%] truncate text-2xl font-bold" [ngClass]="theme() === 'light' ? 'text-slate-900' : 'text-slate-50'">
-            {{ value() }}
+    <ng-template #body>
+      <div class="flex items-start justify-between gap-3">
+        <p class="text-[13px] font-medium text-fg-2">{{ label() }}</p>
+        @if (icon()) {
+          <span class="flex h-8 w-8 items-center justify-center rounded-lg ring-1 ring-inset" [class]="toneClass()">
+            <span class="material-symbols-outlined text-[18px]">{{ icon() }}</span>
           </span>
-        </div>
-        <p class="text-[11px] font-semibold uppercase tracking-[0.18em]" [ngClass]="theme() === 'light' ? 'text-slate-600' : 'text-slate-300'">
-          {{ label() }}
-        </p>
-        @if (sublabel()) {
-          <p class="text-xs font-medium leading-5" [ngClass]="theme() === 'light' ? 'text-slate-500' : 'text-slate-400'">
-            {{ sublabel() }}
-          </p>
         }
       </div>
-    </div>
+      <div>
+        <p class="stat-value">{{ value() }}</p>
+        <div class="mt-1.5 flex items-center justify-between gap-2">
+          <p class="truncate text-xs text-fg-3">{{ sublabel() }}</p>
+          @if (link()) {
+            <span class="material-symbols-outlined text-[16px] text-fg-3 transition-transform group-hover:translate-x-0.5 group-hover:text-brand-text">arrow_forward</span>
+          }
+        </div>
+      </div>
+    </ng-template>
+
+    @if (link()) {
+      <a [routerLink]="link()" class="card group flex h-full flex-col justify-between gap-4 p-5 transition hover:border-line-strong hover:shadow-pop/5 focus-visible:ring-4 focus-visible:ring-brand/20">
+        <ng-container [ngTemplateOutlet]="body" />
+      </a>
+    } @else {
+      <div class="card flex h-full flex-col justify-between gap-4 p-5"><ng-container [ngTemplateOutlet]="body" /></div>
+    }
   `
 })
 export class StatCardComponent {
@@ -47,33 +42,18 @@ export class StatCardComponent {
   value = input<string | number>('—');
   sublabel = input<string>('');
   icon = input<string>('');
-  variant = input<'default' | 'success' | 'warning' | 'primary'>('default');
+  link = input<string>('');
+  variant = input<'default' | 'success' | 'warning' | 'primary' | 'danger'>('default');
+  /** @deprecated kept for template compatibility */
   theme = input<'light' | 'dark'>('dark');
 
-  cardClasses(): Record<string, boolean> {
-    const t = this.theme();
-    const v = this.variant();
-    const isLight = t === 'light';
+  toneClass(): string {
     return {
-      'border-slate-200 bg-white hover:border-slate-300': isLight && v === 'default',
-      'border-slate-700/50 bg-slate-800/80 hover:border-slate-600': !isLight && v === 'default',
-      'border-emerald-200 bg-emerald-50/80 hover:border-emerald-300': isLight && v === 'success',
-      'border-emerald-500/40 bg-emerald-900/20 hover:border-emerald-500/60': !isLight && v === 'success',
-      'border-rose-200 bg-rose-50/80 hover:border-rose-300': isLight && v === 'warning',
-      'border-rose-500/40 bg-rose-900/20 hover:border-rose-500/60': !isLight && v === 'warning',
-      'border-sky-200 bg-sky-50/80 hover:border-sky-300': isLight && v === 'primary',
-      'border-sky-500/40 bg-sky-900/20 hover:border-sky-500/60': !isLight && v === 'primary'
-    };
-  }
-
-  iconLightClass(): string {
-    const v = this.variant();
-    const map: Record<string, string> = {
-      default: 'bg-slate-100 text-slate-600',
-      success: 'bg-emerald-100 text-emerald-700',
-      warning: 'bg-rose-100 text-rose-700',
-      primary: 'bg-sky-100 text-sky-700'
-    };
-    return map[v] ?? 'text-slate-600';
+      default: 'bg-surface-2 text-fg-2 ring-line',
+      success: 'bg-ok-soft text-ok ring-ok/15',
+      warning: 'bg-warn-soft text-warn ring-warn/15',
+      primary: 'bg-brand-soft text-brand-text ring-brand/15',
+      danger: 'bg-bad-soft text-bad ring-bad/15'
+    }[this.variant()];
   }
 }

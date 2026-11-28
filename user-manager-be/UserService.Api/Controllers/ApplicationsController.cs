@@ -148,6 +148,27 @@ public class ApplicationsController(IMediator mediator) : ApiControllerBase
         return OkResponse(credentials);
     }
 
+    /// <summary>
+    /// Replaces the application's redirect URI allow-list. URIs are matched exactly during authorization,
+    /// so register every callback the client uses.
+    /// </summary>
+    [HttpPut("{applicationId:guid}/redirect-uris")]
+    [Authorize(Policy = AuthorizationPolicies.ManageApplications)]
+    [ProducesResponseType(typeof(ApiResponse<ApplicationCredentialDto>), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(ApiResponse<object>), StatusCodes.Status422UnprocessableEntity)]
+    [ProducesResponseType(typeof(ApiResponse<object>), StatusCodes.Status404NotFound)]
+    public async Task<ActionResult<ApiResponse<ApplicationCredentialDto>>> UpdateRedirectUris(
+        Guid applicationId,
+        [FromBody] UpdateApplicationRedirectUrisRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        var updated = await mediator.Send(
+            new UpdateApplicationRedirectUrisCommand(applicationId, request.RedirectUris ?? Array.Empty<string>()),
+            cancellationToken);
+
+        return OkResponse(updated, "Updated");
+    }
+
     [HttpPut("{applicationId:guid}/logo")]
     [Authorize(Policy = AuthorizationPolicies.ManageApplications)]
     [ProducesResponseType(typeof(ApiResponse<CreateApplicationResponse>), StatusCodes.Status200OK)]

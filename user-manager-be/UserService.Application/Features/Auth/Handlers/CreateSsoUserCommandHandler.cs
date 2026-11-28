@@ -1,3 +1,5 @@
+using UserService.Application.Interfaces.Services.Security;
+using UserService.Domain.Entities;
 using MediatR;
 using UserService.Application.Features.Auth.Commands;
 using UserService.Application.Interfaces.Services;
@@ -9,26 +11,28 @@ using UserService.Domain.ValueObjects;
 
 namespace UserService.Application.Features.Auth.Handlers;
 
-public class CreateSSOUserCommandHandler : IRequestHandler<CreateSSOUserCommand, SuccessResponse>
+public class CreateSsoUserCommandHandler : IRequestHandler<CreateSsoUserCommand, SuccessResponse>
 {
+    private readonly IAuditLogger _audit;
     private readonly IIdentityService _identityService;
     private readonly IUserRepository _userRepository;
     private readonly IUnitOfWork _unitOfWork;
     private readonly IClock _clock;
 
-    public CreateSSOUserCommandHandler(
+    public CreateSsoUserCommandHandler(
         IIdentityService identityService,
         IUserRepository userRepository,
         IUnitOfWork unitOfWork,
-        IClock clock)
+        IClock clock, IAuditLogger audit)
     {
+        _audit = audit;
         _identityService = identityService;
         _userRepository = userRepository;
         _unitOfWork = unitOfWork;
         _clock = clock;
     }
 
-    public async Task<SuccessResponse> Handle(CreateSSOUserCommand command, CancellationToken cancellationToken)
+    public async Task<SuccessResponse> Handle(CreateSsoUserCommand command, CancellationToken cancellationToken)
     {
         var existing = await _identityService.GetUserByEmailAsync(command.Email, cancellationToken);
         if (existing != null)
@@ -68,6 +72,7 @@ public class CreateSSOUserCommandHandler : IRequestHandler<CreateSSOUserCommand,
             throw;
         }
 
+        await _audit.LogAsync(AuditEventTypes.SsoUserCreated, true, new AuditEntry(TargetUserId: userId.Value, TargetType: "user", TargetId: userId.Value.ToString(), Details: new { email = command.Email }), cancellationToken);
         return new SuccessResponse(true, $"[SSO Account created] '{command.Email}'.");
     }
 

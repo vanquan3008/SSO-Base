@@ -8,17 +8,17 @@ import type { ApiResponse, SuccessResponse } from '../models/http.model';
 import type {
   AuthResponse,
   AuthenticatedUser,
-  SsoApplication,
-  SsoAuthorizeRequest,
-  SsoAuthorizeResponse,
-  SsoConsentRequest,
-  SsoExchangeTokenRequest
+  HostedSsoLoginResponse,
+  SsoApplication
 } from '../models';
 import { SessionStorageService } from './session-storage.service';
 
 const TOKEN_KEY = 'access_token';
 const USER_KEY = 'user';
 const APPLICATIONS_KEY = 'sso_applications';
+const SESSION_KIND_KEY = 'session_kind';
+
+type SessionKind = 'app' | 'hosted_sso';
 
 @Injectable({ providedIn: 'root' })
 export class AuthService {
@@ -27,13 +27,15 @@ export class AuthService {
   private readonly tokenSignal = signal<string | null>(null);
   private readonly userSignal = signal<AuthenticatedUser | null>(null);
   private readonly applicationsSignal = signal<SsoApplication[]>([]);
+  private readonly sessionKindSignal = signal<SessionKind | null>(null);
 
-  readonly isAuthenticated = computed(() => this.hasValidSession());
+  readonly isAuthenticated = computed(() => this.hasAppSession());
   readonly user = computed(() => this.userSignal());
   readonly isAdmin = computed(() => hasAdminRole(this.userSignal()?.roles));
   readonly permissions = computed(() => this.userSignal()?.permissions ?? []);
   readonly token = computed(() => this.tokenSignal());
   readonly applications = computed(() => this.applicationsSignal());
+  readonly sessionKind = computed(() => this.sessionKindSignal());
 
   constructor(
     private http: HttpClient,
@@ -43,6 +45,7 @@ export class AuthService {
     this.tokenSignal.set(this.readAccessToken());
     this.userSignal.set(this.readUser());
     this.applicationsSignal.set(this.readApplications());
+    this.sessionKindSignal.set(this.readSessionKind());
   }
 
   isTokenValid(): boolean {
@@ -65,7 +68,19 @@ export class AuthService {
   }
 
   hasValidSession(): boolean {
-    return this.isTokenValid() || !!this.userSignal();
+    return this.isTokenValid() && !!this.userSignal();
+  }
+
+  hasAppSession(): boolean {
+    return this.hasValidSession() && this.sessionKindSignal() === 'app';
+  }
+
+  hasHostedAuthSession(): boolean {
+    return this.hasValidSession();
+  }
+
+  isHostedSsoSession(): boolean {
+    return this.hasValidSession() && this.sessionKindSignal() === 'hosted_sso';
   }
 
   getAccessToken(): string | null {
@@ -112,21 +127,19 @@ export class AuthService {
   }
 
   ssoLogin(email: string, password: string) {
-    return this.http.post<ApiResponse<AuthResponse>>(`${this.api}/sso/login`, { email, password });
-  }
-
-  ssoAuthorize(request: SsoAuthorizeRequest) {
-    return this.http.post<ApiResponse<SsoAuthorizeResponse>>(`${this.api}/sso/authorize`, request);
-  }
-
-  ssoConsent(request: SsoConsentRequest) {
-    return this.http.post<ApiResponse<SsoAuthorizeResponse>>(`${this.api}/sso/consent`, request);
-  }
-
-  ssoExchangeToken(request: SsoExchangeTokenRequest) {
-    return this.http.post<ApiResponse<AuthResponse>>(`${this.api}/sso/exchange-token`, request, {
-      withCredentials: true
+    return this.http.post<ApiResponse<HostedSsoLoginResponse>>(`${this.api}/sso/login`, {
+      email,
+      password
     });
+  }
+
+  /** Second sign-in step for accounts with MFA (TOTP or recovery code). */
+  verifyMfa(mfaToken: string, code: string) {
+    return this.http.post<ApiResponse<AuthResponse>>(`${this.api}/mfa/verify`, { mfaToken, code });
+  }
+
+  verifySsoMfa(mfaToken: string, code: string) {
+    return this.http.post<ApiResponse<HostedSsoLoginResponse>>(`${this.api}/sso/mfa/verify`, { mfaToken, code });
   }
 
   requestMagicLink(email: string) {
@@ -182,41 +195,107 @@ export class AuthService {
   }
 
   setSession(res: AuthResponse) {
-    this.sessionStorage.set(TOKEN_KEY, res.accessToken);
-    this.tokenSignal.set(res.accessToken);
+    const applications = (res.applications ?? []).map((app) => this.normalizeApplication(app));
+    this.applySession(
+      res.accessToken,
+      {
+        id: res.user.id,
+        email: res.user.email,
+        username: res.user.username ?? res.user.email,
+        displayName: res.user.displayName,
+        roles: res.user.roles ?? [],
+        permissions: res.user.permissions ?? []
+      },
+      applications,
+      'app'
+    );
+  }
 
-    const u = res.user as any;
-    const normalized: AuthenticatedUser = {
-      id: u.id,
-      email: u.email,
-      username: u.username ?? u.userName ?? u.email,
-      displayName: u.displayName,
-      roles: u.roles ?? [],
-      permissions: u.permissions ?? []
-    };
+  setHostedSsoSession(res: HostedSsoLoginResponse) {
+    this.applySession(
+      res.accessToken,
+      {
+        id: res.user.userId,
+        email: res.user.email,
+        username: res.user.username ?? res.user.email,
+        displayName: res.user.displayName,
+        roles: res.user.roles ?? [],
+        permissions: res.user.permissions ?? []
+      },
+      [],
+      'hosted_sso'
+    );
+  }
 
-    this.sessionStorage.setJson(USER_KEY, normalized);
-    this.userSignal.set(normalized);
+  private applySession(
+    accessToken: string,
+    user: AuthenticatedUser,
+    applications: SsoApplication[],
+    sessionKind: SessionKind
+  ) {
+    this.sessionStorage.set(TOKEN_KEY, accessToken);
+    this.tokenSignal.set(accessToken);
 
-    if (res.applications?.length) {
-      this.sessionStorage.setJson(APPLICATIONS_KEY, res.applications);
-      this.applicationsSignal.set(res.applications);
+    this.sessionStorage.setJson(USER_KEY, user);
+    this.userSignal.set(user);
+
+    this.sessionStorage.set(SESSION_KIND_KEY, sessionKind);
+    this.sessionKindSignal.set(sessionKind);
+
+    if (applications.length) {
+      this.sessionStorage.setJson(APPLICATIONS_KEY, applications);
+      this.applicationsSignal.set(applications);
     } else {
       this.sessionStorage.remove(APPLICATIONS_KEY);
       this.applicationsSignal.set([]);
     }
   }
 
-  logout(options?: { queryParams?: Record<string, string> }) {
+  private normalizeApplication(
+    app:
+      | SsoApplication
+      | {
+          applicationId?: string;
+          applicationName?: string;
+          role?: string;
+        }
+  ): SsoApplication {
+    if ('id' in app && 'name' in app) {
+      return app;
+    }
+
+    return {
+      id: app.applicationId ?? '',
+      name: app.applicationName ?? '',
+      role: app.role
+    };
+  }
+
+  /** Ends the server session (and with allSessions every device), then clears local state. */
+  logout(options?: { queryParams?: Record<string, string>; allSessions?: boolean; navigate?: boolean }) {
     const token = this.tokenSignal();
     this.http.post<ApiResponse<SuccessResponse>>(
       `${this.api}/logout`,
-      {},
+      { allSessions: !!options?.allSessions },
       token ? { headers: { Authorization: `Bearer ${token}` } } : {}
     ).subscribe({ error: () => {} });
 
     this.clearSession();
-    this.router.navigate(['/login'], { queryParams: options?.queryParams });
+    if (options?.navigate !== false) {
+      this.router.navigate(['/login'], { queryParams: options?.queryParams });
+    }
+  }
+
+  discardSession() {
+    this.clearSession();
+  }
+
+  /** Local sign-out after the server rejected the session (expired, revoked or reused refresh token). */
+  expireSession() {
+    const kind = this.sessionKindSignal();
+    this.clearSession();
+    if (kind === 'hosted_sso') return; // hosted pages handle their own redirect with returnUrl
+    this.router.navigate(['/login'], { queryParams: { expired: '1' } });
   }
 
   private readAccessToken(): string | null {
@@ -231,10 +310,16 @@ export class AuthService {
     return this.sessionStorage.getJson<SsoApplication[]>(APPLICATIONS_KEY, []);
   }
 
+  private readSessionKind(): SessionKind | null {
+    const value = this.sessionStorage.get(SESSION_KIND_KEY);
+    return value === 'app' || value === 'hosted_sso' ? value : null;
+  }
+
   private clearSession(): void {
-    this.sessionStorage.removeMany([TOKEN_KEY, USER_KEY, APPLICATIONS_KEY]);
+    this.sessionStorage.removeMany([TOKEN_KEY, USER_KEY, APPLICATIONS_KEY, SESSION_KIND_KEY]);
     this.tokenSignal.set(null);
     this.userSignal.set(null);
     this.applicationsSignal.set([]);
+    this.sessionKindSignal.set(null);
   }
 }

@@ -27,37 +27,34 @@ export interface AuthResponse {
     isSsoAccount?: boolean;
   };
   applications?: SsoApplication[];
+  /** True when the password was correct but a second factor is required. */
+  mfaRequired?: boolean;
+  mfaToken?: string | null;
+  mfaExpiresAt?: string | null;
+  sessionId?: string | null;
+}
+
+export interface HostedSsoLoginResponse {
+  accessToken: string;
+  refreshToken?: string | null;
+  user: {
+    userId: string;
+    email: string;
+    username: string;
+    displayName?: string;
+    roles: string[];
+    permissions?: string[];
+  };
+  mfaRequired?: boolean;
+  mfaToken?: string | null;
+  mfaExpiresAt?: string | null;
+  sessionId?: string | null;
 }
 
 export interface SsoUserApplication {
   id: string;
   name: string;
   role: string;
-}
-
-export interface SsoAuthorizeRequest {
-  email: string;
-  password: string;
-  clientId?: string;
-  redirectUri: string;
-  scopes: string[];
-  state?: string;
-  codeChallenge: string;
-  codeChallengeMethod?: string;
-}
-
-export interface SsoConsentRequest extends SsoAuthorizeRequest {
-  approve: boolean;
-}
-
-export interface SsoAuthorizeResponse {
-  requiresConsent: boolean;
-  code?: string;
-  redirectUri: string;
-  state?: string;
-  clientName?: string;
-  requestedScopes?: string[];
-  missingScopes?: string[];
 }
 
 export interface SsoExchangeTokenRequest {

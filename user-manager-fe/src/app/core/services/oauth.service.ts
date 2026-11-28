@@ -16,6 +16,10 @@ export interface OAuthAuthorizeContext {
   clientId: string;
   redirectUri: string;
   codeVerifier?: string | null;
+  state?: string | null;
+  /** OIDC nonce echoed in the ID token; verified by the callback. */
+  nonce?: string | null;
+  returnUrl?: string | null;
 }
 
 @Injectable({ providedIn: 'root' })
@@ -47,14 +51,42 @@ export class OauthService {
   }
 
   authorize(request: OAuthAuthorizeRequest) {
-    const params: any = { ...request };
-    if (request.scopes) {
-      params.scope = request.scopes.join(' ');
-      delete params.scopes;
-    }
+    const params = this.buildAuthorizeParams(request);
     return this.http.get<ApiResponse<OAuthAuthorizeResponse>>(`${this.oauthApi}/authorize`, { params });
   }
 
+  buildHostedAuthorizeUrl(request: OAuthAuthorizeRequest) {
+    const params = this.buildAuthorizeParams(request);
+    return `/oauth/authorize?${new URLSearchParams(params).toString()}`;
+  }
+
+  private buildAuthorizeParams(request: OAuthAuthorizeRequest) {
+    const params: Record<string, string> = {
+      response_type: 'code',
+      client_id: request.clientId,
+      redirect_uri: request.redirectUri,
+      scope: request.scopes.join(' '),
+      code_challenge: request.codeChallenge
+    };
+
+    if (request.state?.trim()) {
+      params['state'] = request.state.trim();
+    }
+
+    if (request.codeChallengeMethod?.trim()) {
+      params['code_challenge_method'] = request.codeChallengeMethod.trim();
+    }
+
+    if (request.nonce?.trim()) {
+      params['nonce'] = request.nonce.trim();
+    }
+
+    if (request.prompt?.trim()) {
+      params['prompt'] = request.prompt.trim();
+    }
+
+    return params;
+  }
 
   consent(request: OAuthConsentRequest) {
     return this.http.post<ApiResponse<OAuthAuthorizeResponse>>(`${this.oauthApi}/consent`, request);

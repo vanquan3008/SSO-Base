@@ -1,5 +1,6 @@
 import { CommonModule } from '@angular/common';
-import { Component, DestroyRef, OnInit, computed, inject, signal } from '@angular/core';
+import { ClockService } from '../../core/services/clock.service';
+import { Component, DestroyRef, OnInit, computed, effect, inject, input, signal } from '@angular/core';
 import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
 import { ActivatedRoute, RouterLink } from '@angular/router';
 import { catchError, finalize, forkJoin, of } from 'rxjs';
@@ -14,7 +15,10 @@ import type {
 import { ApplicationsService } from '../../core/services/applications.service';
 import { NotificationService } from '../../core/services/notification.service';
 import { RolesService } from '../../core/services/roles.service';
-import { ThemeService } from '../../core/services/theme.service';
+import { SecurityService } from '../../core/services/security.service';
+import { TranslateService } from '../../core/services/translate.service';
+import type { AuditLogEntry, MfaStatus, SessionInfo } from '../../core/models';
+import { describeUserAgent, eventIcon, humanizeEvent, relativeTime } from '../../shared/utils/format';
 import { UsersService } from '../../core/services/users.service';
 import {
   UNREACHABLE_SERVER_MESSAGE_VI,
@@ -26,6 +30,9 @@ import type { DropdownOption } from '../../shared/components/dropdown/dropdown.c
 import { UserAccessOverviewComponent } from './components/user-access-overview.component';
 import { UserRoleManagementComponent } from './components/user-role-management.component';
 import { UserSsoAccessComponent } from './components/user-sso-access.component';
+import { AuthService } from '../../core/services/auth.service';
+import { ConfirmService } from '../../core/services/confirm.service';
+import { canBanUsers } from '../../core/constants/roles';
 
 @Component({
   selector: 'app-user-detail',
@@ -41,6 +48,7 @@ import { UserSsoAccessComponent } from './components/user-sso-access.component';
   templateUrl: './user-detail.component.html'
 })
 export class UserDetailComponent implements OnInit {
+  private readonly clock = inject(ClockService);
   private destroyRef = inject(DestroyRef);
   private route = inject(ActivatedRoute);
   private usersService = inject(UsersService);
@@ -48,7 +56,14 @@ export class UserDetailComponent implements OnInit {
   private rolesService = inject(RolesService);
   private notify = inject(NotificationService);
   private pageToolbar = inject(PageToolbarService);
-  theme = inject(ThemeService).theme;
+  private auth = inject(AuthService);
+  private confirm = inject(ConfirmService);
+  private security = inject(SecurityService);
+  private translate = inject(TranslateService);
+  readonly t = this.translate.t;
+  userId = input<string | null>(null);
+  embedded = input(false);
+  private lastLoadedUserId: string | null = null;
 
   userWithRoles = signal<UserWithRoles | null>(null);
   allRoles = signal<RoleDto[]>([]);
@@ -58,6 +73,7 @@ export class UserDetailComponent implements OnInit {
   selectedRole = signal('');
   addingRole = signal(false);
   removingRole = signal<string | null>(null);
+  banActionLoading = signal(false);
 
   ssoApplications = signal<SsoUserApplication[]>([]);
   allApplications = signal<ApplicationListItem[]>([]);
@@ -67,14 +83,22 @@ export class UserDetailComponent implements OnInit {
   granting = signal(false);
   revoking = signal<string | null>(null);
 
+  // Security (MFA, sessions, activity)
+  mfa = signal<MfaStatus | null>(null);
+  sessions = signal<SessionInfo[]>([]);
+  activity = signal<AuditLogEntry[]>([]);
+  securityBusy = signal(false);
+
   assignedRoles = computed(() => this.userWithRoles()?.roles ?? []);
-  userId = computed(() => this.userWithRoles()?.user?.id ?? '');
+  resolvedUserId = computed(() => this.userWithRoles()?.user?.id ?? '');
   isSsoUser = computed(() => this.userWithRoles()?.user?.isSsoAccount === true);
-  accountTypeLabel = computed(() => (this.isSsoUser() ? 'SSO account' : 'Standard account'));
+  accountTypeLabel = computed(() => (this.isSsoUser() ? this.t().accSso : this.t().accConsole));
   availabilityLabel = computed(() => {
     const user = this.userWithRoles()?.user;
-    return user?.isActive && !user?.isBanned ? 'Active' : 'Restricted';
+    return user?.isActive && !user?.isBanned ? this.t().usersActive : this.t().usersInactive;
   });
+  canManageBan = computed(() => canBanUsers(this.auth.user()?.roles, this.auth.applications()));
+  primaryRoleLabel = computed(() => this.sortRoleNames(this.assignedRoles())[0] ?? 'No role');
 
   applicationsAvailableToGrant = computed(() => {
     const grantedIds = new Set(this.ssoApplications().map(application => application.id));
@@ -101,15 +125,34 @@ export class UserDetailComponent implements OnInit {
     this.appRoles().map(role => ({ value: role.name, label: role.name }))
   );
 
+  constructor() {
+    effect(() => {
+      const embeddedUserId = this.userId();
+      if (!embeddedUserId) {
+        return;
+      }
+
+      this.tryLoad(embeddedUserId);
+    });
+  }
+
   ngOnInit() {
-    const id = this.route.snapshot.paramMap.get('id');
-    if (!id) {
-      this.error.set('Invalid user id');
-      this.loading.set(false);
+    if (this.userId()) {
       return;
     }
 
-    this.load(id);
+    this.route.paramMap
+      .pipe(takeUntilDestroyed(this.destroyRef))
+      .subscribe(params => {
+        const id = params.get('id');
+        if (!id) {
+          this.error.set('Invalid user id');
+          this.loading.set(false);
+          return;
+        }
+
+        this.tryLoad(id);
+      });
   }
 
   onGrantAppChange(appId: string) {
@@ -137,7 +180,7 @@ export class UserDetailComponent implements OnInit {
 
   addRole() {
     const role = this.selectedRole().trim();
-    const uid = this.userId();
+    const uid = this.resolvedUserId();
 
     if (!role || !uid || this.assignedRoles().includes(role)) {
       return;
@@ -177,7 +220,7 @@ export class UserDetailComponent implements OnInit {
   }
 
   removeRole(roleName: string) {
-    const uid = this.userId();
+    const uid = this.resolvedUserId();
     if (!uid) return;
 
     this.removingRole.set(roleName);
@@ -213,7 +256,7 @@ export class UserDetailComponent implements OnInit {
   }
 
   grantSsoApplication() {
-    const uid = this.userId();
+    const uid = this.resolvedUserId();
     const appId = this.grantAppId().trim();
     const role = this.grantRole().trim();
 
@@ -252,7 +295,7 @@ export class UserDetailComponent implements OnInit {
   }
 
   revokeSsoApplication(appId: string) {
-    const uid = this.userId();
+    const uid = this.resolvedUserId();
     if (!uid) return;
 
     this.revoking.set(appId);
@@ -279,6 +322,79 @@ export class UserDetailComponent implements OnInit {
           );
         }
       });
+  }
+
+  async toggleUserAccess() {
+    const current = this.userWithRoles()?.user;
+    if (!current || !this.canManageBan() || this.banActionLoading()) {
+      return;
+    }
+
+    if (current.isBanned) {
+      this.unbanUser(current.id);
+      return;
+    }
+
+    const accepted = await this.confirm.confirm({
+      title: this.t().udDisable,
+      message: this.t().udBanConfirm,
+      confirmText: this.t().udDisable,
+      variant: 'danger'
+    });
+
+    if (!accepted) {
+      return;
+    }
+
+    this.banUser(current.id);
+  }
+
+  loadSecurity(userId: string) {
+    this.security.userMfa(userId).subscribe({ next: m => this.mfa.set(m), error: () => this.mfa.set(null) });
+    this.security.userSessions(userId).subscribe({ next: s => this.sessions.set(s), error: () => this.sessions.set([]) });
+    this.security.auditLogs({ page: 1, pageSize: 8, userId }).subscribe({ next: r => this.activity.set(r.data ?? []), error: () => this.activity.set([]) });
+  }
+
+  async resetMfa() {
+    const uid = this.resolvedUserId();
+    if (!uid || !(await this.confirm.confirm({ title: this.t().udMfaReset, message: this.t().udMfaResetConfirm, confirmText: this.t().udMfaReset, variant: 'danger' }))) return;
+    this.securityBusy.set(true);
+    this.security.resetUserMfa(uid).subscribe({
+      next: () => { this.securityBusy.set(false); this.notify.success(this.t().udMfaResetDone); this.loadSecurity(uid); this.patchUserState({ twoFactorEnabled: false }); },
+      error: err => { this.securityBusy.set(false); this.notify.error(getHttpErrorMessage(err, this.t().authFailed, UNREACHABLE_SERVER_MESSAGE_VI)); }
+    });
+  }
+
+  async revokeAllSessions() {
+    const uid = this.resolvedUserId();
+    if (!uid || !(await this.confirm.confirm({ title: this.t().udRevokeAll, message: this.t().udRevokeAllConfirm, confirmText: this.t().udRevokeAll, variant: 'danger' }))) return;
+    this.securityBusy.set(true);
+    this.security.revokeUserSessions(uid).subscribe({
+      next: r => { this.securityBusy.set(false); this.notify.success(r.data?.message ?? this.t().udRevokeAll); this.loadSecurity(uid); },
+      error: err => { this.securityBusy.set(false); this.notify.error(getHttpErrorMessage(err, this.t().authFailed, UNREACHABLE_SERVER_MESSAGE_VI)); }
+    });
+  }
+
+  device(ua: string | null | undefined) { return describeUserAgent(ua); }
+  ago(iso: string) { return relativeTime(iso, this.translate.locale(), this.clock.now()); }
+  humanize = humanizeEvent;
+  eventIcon = eventIcon;
+
+  copyUserId() {
+    this.copyText(this.userWithRoles()?.user?.id, 'User ID');
+  }
+
+  copyEmail() {
+    this.copyText(this.userWithRoles()?.user?.email, 'Email');
+  }
+
+  private tryLoad(userId: string) {
+    if (this.lastLoadedUserId === userId) {
+      return;
+    }
+
+    this.lastLoadedUserId = userId;
+    this.load(userId);
   }
 
   private load(userId: string) {
@@ -310,14 +426,17 @@ export class UserDetailComponent implements OnInit {
           this.actionMessage.set('');
 
           const u = user.data.user;
-          this.pageToolbar.setMeta({
-            title: (u as IdentityUser & { displayName?: string }).displayName || u.userName || u.email || 'User',
-            eyebrow: 'User access',
-            badge: u.isSsoAccount ? 'SSO account' : 'Standard account',
-            description:
-              'Review account status, manage global roles, and control SSO application access.'
-          });
+          if (!this.embedded()) {
+            this.pageToolbar.setMeta({
+              title: (u as IdentityUser & { displayName?: string }).displayName || u.userName || u.email || 'User',
+              eyebrow: 'User access',
+              badge: u.isSsoAccount ? 'SSO account' : 'Standard account',
+              description:
+                'Review account status, manage global roles, and control SSO application access.'
+            });
+          }
 
+          this.loadSecurity(userId);
           if (user.data.user.isSsoAccount) {
             this.loadSsoApplications(userId);
           } else {
@@ -347,5 +466,118 @@ export class UserDetailComponent implements OnInit {
           this.ssoApplications.set([]);
         }
       });
+  }
+
+  private banUser(userId: string) {
+    this.banActionLoading.set(true);
+    this.usersService
+      .banUser(userId)
+      .pipe(
+        finalize(() => this.banActionLoading.set(false)),
+        takeUntilDestroyed(this.destroyRef)
+      )
+      .subscribe({
+        next: response => {
+          if (!response.success) {
+            this.notify.error(response.error?.message || response.message || 'Failed to disable user.');
+            return;
+          }
+
+          this.patchUserState({ isBanned: true });
+          this.actionMessage.set(response.data?.message || response.message || 'User disabled.');
+          this.notify.success(response.data?.message || 'User disabled.');
+        },
+        error: (err: any) => {
+          this.notify.error(
+            getHttpErrorMessage(err, 'Failed to disable user.', UNREACHABLE_SERVER_MESSAGE_VI)
+          );
+        }
+      });
+  }
+
+  private unbanUser(userId: string) {
+    this.banActionLoading.set(true);
+    this.usersService
+      .unbanUser(userId)
+      .pipe(
+        finalize(() => this.banActionLoading.set(false)),
+        takeUntilDestroyed(this.destroyRef)
+      )
+      .subscribe({
+        next: response => {
+          if (!response.success) {
+            this.notify.error(response.error?.message || response.message || 'Failed to restore access.');
+            return;
+          }
+
+          this.patchUserState({ isBanned: false, banReason: null });
+          this.actionMessage.set(response.data?.message || response.message || 'Access restored.');
+          this.notify.success(response.data?.message || 'Access restored.');
+        },
+        error: (err: any) => {
+          this.notify.error(
+            getHttpErrorMessage(err, 'Failed to restore access.', UNREACHABLE_SERVER_MESSAGE_VI)
+          );
+        }
+      });
+  }
+
+  private patchUserState(patch: Partial<IdentityUser>) {
+    const current = this.userWithRoles();
+    if (!current) {
+      return;
+    }
+
+    this.userWithRoles.set({
+      ...current,
+      user: {
+        ...current.user,
+        ...patch
+      }
+    });
+  }
+
+  private async copyText(value: string | undefined | null, label: string) {
+    if (!value) {
+      this.notify.error(`${label} is not available.`);
+      return;
+    }
+
+    try {
+      await navigator.clipboard.writeText(value);
+      this.notify.success(`${label} copied.`);
+    } catch {
+      this.notify.error(`Failed to copy ${label.toLowerCase()}.`);
+    }
+  }
+
+  private sortRoleNames(roleNames: string[]) {
+    const seen = new Set<string>();
+    return [...roleNames]
+      .filter(role => {
+        const key = role.trim().toLowerCase();
+        if (!key || seen.has(key)) {
+          return false;
+        }
+
+        seen.add(key);
+        return true;
+      })
+      .sort((left, right) => this.rolePriority(left) - this.rolePriority(right) || left.localeCompare(right));
+  }
+
+  private rolePriority(roleName: string) {
+    const normalized = roleName.trim().toLowerCase();
+
+    if (normalized.includes('superadmin')) return 0;
+    if (normalized.includes('admin')) return 1;
+    if (normalized.includes('owner')) return 2;
+    if (normalized.includes('manager')) return 3;
+    if (normalized.includes('editor')) return 4;
+    if (normalized.includes('analyst')) return 5;
+    if (normalized.includes('viewer')) return 6;
+    if (normalized.includes('user')) return 7;
+
+    return 8;
   }
 }

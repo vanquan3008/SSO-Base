@@ -1,97 +1,82 @@
-import { CommonModule } from '@angular/common';
-import { Component, input } from '@angular/core';
+import { Component, inject, input, output } from '@angular/core';
+import { ClockService } from '../../../core/services/clock.service';
 import type { IdentityUser } from '../../../core/models';
+import { TranslateService } from '../../../core/services/translate.service';
+import { formatDateTime, initials, relativeTime } from '../../../shared/utils/format';
 
 @Component({
   selector: 'app-user-access-overview',
   standalone: true,
-  imports: [CommonModule],
   template: `
-    <section class="rounded-3xl border p-6 shadow-sm" [ngClass]="surfaceClasses()">
-      <div class="flex flex-col gap-6 lg:flex-row lg:items-start lg:justify-between">
-        <div class="space-y-4">
+    <section class="card">
+      <div class="flex flex-col gap-5 p-5 sm:flex-row sm:items-start">
+        <span class="avatar h-14 w-14 text-lg">{{ initialsOf(user().userName || user().email) }}</span>
+        <div class="min-w-0 flex-1">
           <div class="flex flex-wrap items-center gap-2">
-            <span
-              class="inline-flex items-center rounded-full px-3 py-1 text-xs font-semibold uppercase tracking-[0.2em]"
-              [ngClass]="theme() === 'light' ? 'bg-slate-900 text-white' : 'bg-white text-slate-900'"
-            >
-              {{ accountTypeLabel() }}
-            </span>
-            <span
-              class="inline-flex items-center rounded-full px-3 py-1 text-xs font-medium"
-              [ngClass]="user().emailConfirmed
-                ? (theme() === 'light' ? 'bg-emerald-100 text-emerald-800' : 'bg-emerald-500/15 text-emerald-200')
-                : (theme() === 'light' ? 'bg-amber-100 text-amber-800' : 'bg-amber-500/15 text-amber-200')"
-            >
-              {{ user().emailConfirmed ? 'Email verified' : 'Email pending' }}
-            </span>
-            <span
-              class="inline-flex items-center rounded-full px-3 py-1 text-xs font-medium"
-              [ngClass]="user().isBanned
-                ? (theme() === 'light' ? 'bg-rose-100 text-rose-800' : 'bg-rose-500/15 text-rose-200')
-                : (theme() === 'light' ? 'bg-sky-100 text-sky-800' : 'bg-sky-500/15 text-sky-200')"
-            >
-              {{ availabilityLabel() }}
-            </span>
+            <h1 class="truncate text-xl font-semibold">{{ user().userName }}</h1>
+            @if (user().isBanned) { <span class="badge-bad"><span class="dot"></span>{{ t().usersBanned }}</span> }
+            @else if (user().isActive) { <span class="badge-ok"><span class="dot"></span>{{ availabilityLabel() }}</span> }
+            @else { <span class="badge-neutral"><span class="dot"></span>{{ availabilityLabel() }}</span> }
+            <span class="badge-neutral">{{ accountTypeLabel() }}</span>
+            @if (user().twoFactorEnabled) { <span class="badge-brand"><span class="material-symbols-outlined text-[13px]">verified_user</span>MFA</span> }
           </div>
-
-          <div>
-            <h2 class="text-2xl font-semibold tracking-tight" [ngClass]="theme() === 'light' ? 'text-slate-950' : 'text-white'">
-              {{ user().userName }}
-            </h2>
-            <p class="mt-1 text-sm" [ngClass]="theme() === 'light' ? 'text-slate-600' : 'text-slate-300'">
-              {{ user().email }}
-            </p>
-          </div>
-
-          <div class="grid gap-3 sm:grid-cols-2">
-            <div class="rounded-2xl border px-4 py-3" [ngClass]="statClasses()">
-              <p class="text-xs uppercase tracking-[0.2em] text-slate-500">User ID</p>
-              <p class="mt-2 break-all font-mono text-xs" [ngClass]="theme() === 'light' ? 'text-slate-700' : 'text-slate-300'">
-                {{ user().id }}
-              </p>
-            </div>
-            <div class="rounded-2xl border px-4 py-3" [ngClass]="statClasses()">
-              <p class="text-xs uppercase tracking-[0.2em] text-slate-500">Created</p>
-              <p class="mt-2 text-sm font-medium" [ngClass]="theme() === 'light' ? 'text-slate-900' : 'text-white'">
-                {{ user().createdAt | date:'medium' }}
-              </p>
-            </div>
-            <div class="rounded-2xl border px-4 py-3" [ngClass]="statClasses()">
-              <p class="text-xs uppercase tracking-[0.2em] text-slate-500">Roles</p>
-              <p class="mt-2 text-2xl font-semibold" [ngClass]="theme() === 'light' ? 'text-slate-950' : 'text-white'">
-                {{ assignedRoleCount() }}
-              </p>
-            </div>
-            <div class="rounded-2xl border px-4 py-3" [ngClass]="statClasses()">
-              <p class="text-xs uppercase tracking-[0.2em] text-slate-500">SSO Apps</p>
-              <p class="mt-2 text-2xl font-semibold" [ngClass]="theme() === 'light' ? 'text-slate-950' : 'text-white'">
-                {{ ssoAppCount() }}
-              </p>
-            </div>
-          </div>
+          <p class="mt-1 truncate text-sm text-fg-2">{{ user().email }}</p>
+          @if (user().isBanned && user().banReason) {
+            <p class="mt-2 text-[13px] text-bad">{{ t().udBanReason }}: {{ user().banReason }}</p>
+          }
+        </div>
+        <div class="flex shrink-0 flex-wrap gap-2">
+          <button type="button" class="btn-secondary btn-sm" (click)="copyEmail.emit()"><span class="material-symbols-outlined">mail</span>{{ t().udCopyEmail }}</button>
+          <button type="button" class="btn-secondary btn-sm" (click)="copyId.emit()"><span class="material-symbols-outlined">fingerprint</span>{{ t().udCopyId }}</button>
+          @if (canToggleAccess()) {
+            <button type="button" [class]="user().isBanned ? 'btn-primary btn-sm' : 'btn-danger btn-sm'" (click)="toggleAccess.emit()" [disabled]="accessActionLoading()">
+              @if (accessActionLoading()) { <span class="spinner"></span> }
+              {{ user().isBanned ? t().udEnable : t().udDisable }}
+            </button>
+          }
         </div>
       </div>
+      <dl class="grid grid-cols-2 gap-px border-t border-line bg-line sm:grid-cols-4">
+        @for (s of stats(); track s.label) {
+          <div class="bg-surface px-5 py-3.5">
+            <dt class="text-xs text-fg-3">{{ s.label }}</dt>
+            <dd class="mt-1 truncate text-sm font-medium">{{ s.value }}</dd>
+          </div>
+        }
+      </dl>
     </section>
   `
 })
 export class UserAccessOverviewComponent {
+  private readonly clock = inject(ClockService);
+  private readonly translate = inject(TranslateService);
+  readonly t = this.translate.t;
+
   user = input.required<IdentityUser>();
   assignedRoleCount = input.required<number>();
   ssoAppCount = input.required<number>();
   accountTypeLabel = input.required<string>();
   availabilityLabel = input.required<string>();
+  primaryRole = input.required<string>();
+  canToggleAccess = input<boolean>(false);
+  accessActionLoading = input<boolean>(false);
+  /** @deprecated kept for template compatibility */
   theme = input<'light' | 'dark'>('dark');
 
-  surfaceClasses() {
-    return this.theme() === 'light'
-      ? 'border-sky-200 bg-gradient-to-br from-white via-sky-50 to-cyan-50'
-      : 'border-sky-500/20 bg-gradient-to-br from-slate-900 via-slate-900 to-sky-950/70';
-  }
+  copyId = output<void>();
+  copyEmail = output<void>();
+  toggleAccess = output<void>();
 
-  statClasses() {
-    return this.theme() === 'light'
-      ? 'border-slate-200 bg-white text-slate-900'
-      : 'border-slate-800 bg-slate-950/70 text-slate-100';
+  initialsOf = initials;
+
+  stats() {
+    const u = this.user();
+    const t = this.t();
+    return [
+      { label: t.accRoles, value: `${this.primaryRole()}${this.assignedRoleCount() > 1 ? ` +${this.assignedRoleCount() - 1}` : ''}` },
+      { label: t.accEmailStatus, value: u.emailConfirmed ? t.accVerified : t.accUnverified },
+      { label: t.usersColLastSignIn, value: u.lastLoginAt ? relativeTime(u.lastLoginAt, this.translate.locale(), this.clock.now()) : t.usersNever },
+      { label: t.accMemberSince, value: formatDateTime(u.createdAt, this.translate.locale()) }
+    ];
   }
 }

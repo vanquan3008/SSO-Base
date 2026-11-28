@@ -1,396 +1,150 @@
-import { CommonModule } from '@angular/common';
-import { Component, computed, inject, OnInit, signal } from '@angular/core';
+import { Component, OnInit, inject, signal } from '@angular/core';
 import { FormBuilder, ReactiveFormsModule, Validators } from '@angular/forms';
-import { ActivatedRoute, RouterModule } from '@angular/router';
-import { environment } from '../../../../environments/environment';
-import type { SsoAuthorizeRequest, SsoAuthorizeResponse, SsoConsentRequest } from '../../../core/models';
+import { ActivatedRoute, Router, RouterLink } from '@angular/router';
 import { AuthService } from '../../../core/services/auth.service';
-import { NotificationService } from '../../../core/services/notification.service';
 import { OauthService } from '../../../core/services/oauth.service';
-import { ThemeService } from '../../../core/services/theme.service';
+import { TranslateService } from '../../../core/services/translate.service';
+import { apiErrorCode, apiErrorMessage } from '../../../core/utils/http-error.utils';
+import type { HostedSsoLoginResponse } from '../../../core/models';
+import { AuthShellComponent } from '../../../shared/components/auth-shell/auth-shell.component';
+import { MfaStepComponent } from '../../../shared/components/mfa-step/mfa-step.component';
 
-type SsoLocale = 'vi' | 'en' | 'zh';
-
-interface SsoTranslation {
-  code: string;
-  title: string;
-  subtitle: string;
-  emailLabel: string;
-  emailPlaceholder: string;
-  passwordLabel: string;
-  passwordPlaceholder: string;
-  loginButton: string;
-  connecting: string;
-  backToLogin: string;
-  or: string;
-  consentTitle: string;
-  consentSubtitle: string;
-  consentRequested: string;
-  deny: string;
-  approve: string;
-  processing: string;
-  errorFailed: string;
-  errorCodeMissing: string;
-  errorConsentFailed: string;
-  errorDenied: string;
-  securitySsl: string;
-  securityOAuth: string;
-}
-
-const SSO_TRANSLATIONS: Record<SsoLocale, SsoTranslation> = {
-  vi: {
-    code: 'VI',
-    title: 'SSO Enterprise',
-    subtitle: 'Đăng nhập an toàn với tài khoản doanh nghiệp',
-    emailLabel: 'Email SSO',
-    emailPlaceholder: 'ten.ban@congty.com',
-    passwordLabel: 'Mật khẩu SSO',
-    passwordPlaceholder: '........',
-    loginButton: 'Đăng nhập bảo mật',
-    connecting: 'Đang kết nối SSO...',
-    backToLogin: 'Quay lại đăng nhập thường',
-    or: 'hoặc',
-    consentTitle: 'Cấp quyền truy cập',
-    consentSubtitle: 'muốn truy cập tài khoản của bạn',
-    consentRequested: 'Ứng dụng này sẽ có thể:',
-    deny: 'Từ chối',
-    approve: 'Cho phép',
-    processing: 'Đang xử lý...',
-    errorFailed: 'Đăng nhập SSO thất bại',
-    errorCodeMissing: 'Không nhận được authorization code',
-    errorConsentFailed: 'Xác nhận quyền thất bại',
-    errorDenied: 'Bạn đã từ chối cấp quyền',
-    securitySsl: 'SSL/TLS Secure',
-    securityOAuth: 'OAuth 2.0 Standard'
-  },
-  en: {
-    code: 'EN',
-    title: 'SSO Enterprise',
-    subtitle: 'Secure sign-in with your business account',
-    emailLabel: 'SSO Email',
-    emailPlaceholder: 'your.name@company.com',
-    passwordLabel: 'SSO Password',
-    passwordPlaceholder: '........',
-    loginButton: 'Secure Sign In',
-    connecting: 'Connecting to SSO...',
-    backToLogin: 'Back to standard login',
-    or: 'or',
-    consentTitle: 'Authorize Access',
-    consentSubtitle: 'wants to access your account',
-    consentRequested: 'This application will be able to:',
-    deny: 'Deny',
-    approve: 'Approve',
-    processing: 'Processing...',
-    errorFailed: 'SSO login failed',
-    errorCodeMissing: 'Authorization code not received',
-    errorConsentFailed: 'Consent verification failed',
-    errorDenied: 'You have denied access',
-    securitySsl: 'SSL/TLS Secure',
-    securityOAuth: 'OAuth 2.0 Standard'
-  },
-  zh: {
-    code: '中文',
-    title: 'SSO Enterprise',
-    subtitle: 'Secure sign-in with your business account',
-    emailLabel: 'SSO Email',
-    emailPlaceholder: 'name@company.com',
-    passwordLabel: 'SSO Password',
-    passwordPlaceholder: '........',
-    loginButton: 'Secure Sign In',
-    connecting: 'Connecting to SSO...',
-    backToLogin: 'Back to standard login',
-    or: 'or',
-    consentTitle: 'Authorize Access',
-    consentSubtitle: 'wants to access your account',
-    consentRequested: 'This application will be able to:',
-    deny: 'Deny',
-    approve: 'Approve',
-    processing: 'Processing...',
-    errorFailed: 'SSO login failed',
-    errorCodeMissing: 'Authorization code not received',
-    errorConsentFailed: 'Consent verification failed',
-    errorDenied: 'You have denied access',
-    securitySsl: 'SSL/TLS Secure',
-    securityOAuth: 'OAuth 2.0 Standard'
-  }
-};
-
+/** Hosted sign-in used by the OAuth authorize flow for SSO (end-user) accounts. */
 @Component({
   selector: 'app-sso-login',
   standalone: true,
-  host: { class: 'app-host-fill' },
-  imports: [CommonModule, ReactiveFormsModule, RouterModule],
-  templateUrl: './sso-login.component.html'
+  imports: [ReactiveFormsModule, RouterLink, AuthShellComponent, MfaStepComponent],
+  template: `
+    <app-auth-shell>
+      @if (mfa(); as pending) {
+        <app-mfa-step [email]="pending.email" [loading]="loading()" [error]="error()" (verify)="verifyMfa($event)" (back)="mfa.set(null)" />
+      } @else {
+        <div class="mb-8">
+          <h1 class="text-[26px] font-semibold leading-tight tracking-[-0.02em]">{{ t().ssoPortalTitle }}</h1>
+          <p class="mt-1.5 text-sm text-fg-2">{{ t().ssoPortalSubtitle }}</p>
+          @if (returnUrl) {
+            <p class="mt-3 inline-flex items-center gap-1.5 text-xs text-fg-3"><span class="material-symbols-outlined text-[15px]">subdirectory_arrow_right</span>{{ t().ssoContinuingTo }}</p>
+          }
+        </div>
+
+        <form [formGroup]="form" (ngSubmit)="submit()" class="space-y-4" novalidate>
+          <div>
+            <label class="label" for="sso-email">{{ t().authEmail }}</label>
+            <input id="sso-email" type="email" class="input input-lg" formControlName="email" autocomplete="username" placeholder="you@company.com"
+                   [class.input-invalid]="invalid('email')" autofocus />
+            @if (invalid('email')) { <p class="error-text">{{ t().authInvalidEmail }}</p> }
+          </div>
+          <div>
+            <div class="mb-1.5 flex items-center justify-between">
+              <label class="text-[13px] font-medium" for="sso-password">{{ t().authPassword }}</label>
+              <a routerLink="/forgot-password" class="link text-[13px]">{{ t().authForgot }}</a>
+            </div>
+            <div class="relative">
+              <input id="sso-password" class="input input-lg pr-10" formControlName="password" autocomplete="current-password"
+                     [type]="showPassword() ? 'text' : 'password'" [class.input-invalid]="invalid('password')" />
+              <button type="button" class="btn-icon-sm absolute right-1 top-1" (click)="showPassword.set(!showPassword())"
+                      [attr.aria-label]="showPassword() ? t().authHidePassword : t().authShowPassword">
+                <span class="material-symbols-outlined text-[18px]">{{ showPassword() ? 'visibility_off' : 'visibility' }}</span>
+              </button>
+            </div>
+            @if (invalid('password')) { <p class="error-text">{{ t().authPasswordRequired }}</p> }
+          </div>
+
+          @if (error()) {
+            <div class="alert-bad" role="alert"><span class="material-symbols-outlined">error</span><span>{{ error() }}</span></div>
+          }
+
+          <button type="submit" class="btn-primary btn-lg btn-block" [disabled]="loading()">
+            @if (loading()) { <span class="spinner"></span> {{ t().authSigningIn }} } @else { {{ t().authSignIn }} }
+          </button>
+        </form>
+
+        <div class="mt-6 flex items-center justify-between text-[13px]">
+          <a routerLink="/register" class="link">{{ t().registerLink }}</a>
+          <button type="button" class="font-medium text-fg-2 hover:text-fg" (click)="useAdminLogin()">{{ t().authConsoleTitle }}</button>
+        </div>
+      }
+    </app-auth-shell>
+  `
 })
 export class SsoLoginComponent implements OnInit {
   private readonly fb = inject(FormBuilder);
-  private readonly route = inject(ActivatedRoute);
   private readonly auth = inject(AuthService);
-  private readonly notify = inject(NotificationService);
+  private readonly router = inject(Router);
+  private readonly route = inject(ActivatedRoute);
   private readonly oauth = inject(OauthService);
-  private readonly themeService = inject(ThemeService);
+  readonly t = inject(TranslateService).t;
 
-  readonly theme = this.themeService.theme;
-  readonly error = signal('');
   readonly loading = signal(false);
-  readonly showConsent = signal(false);
-  readonly consentData = signal<SsoAuthorizeResponse | null>(null);
-  readonly language = signal<SsoLocale>('vi');
+  readonly error = signal('');
   readonly showPassword = signal(false);
-
-  readonly t = computed(() => SSO_TRANSLATIONS[this.language()]);
-
-  readonly scopeDescriptions = computed(() => {
-    const lang = this.language();
-    return {
-      profile: {
-        title: lang === 'vi' ? 'Thông tin cá nhân' : 'Personal Profile',
-        desc: lang === 'vi' ? 'Họ tên, ảnh đại diện và thông tin cơ bản' : 'Your name, avatar, and basic info',
-        icon: 'person'
-      },
-      email: {
-        title: lang === 'vi' ? 'Địa chỉ email' : 'Email Address',
-        desc: lang === 'vi' ? 'Truy cập vào email chính của bạn' : 'Access to your primary email address',
-        icon: 'mail'
-      },
-      openid: {
-        title: lang === 'vi' ? 'Định danh số' : 'Digital Identity',
-        desc: lang === 'vi' ? 'Xác thực định danh duy nhất của bạn' : 'Verify your unique digital identity',
-        icon: 'fingerprint'
-      },
-      phone: {
-        title: lang === 'vi' ? 'Số điện thoại' : 'Phone Number',
-        desc: lang === 'vi' ? 'Xem số điện thoại đã xác thực' : 'View your verified phone number',
-        icon: 'phone'
-      },
-      address: {
-        title: lang === 'vi' ? 'Địa chỉ' : 'Address',
-        desc: lang === 'vi' ? 'Xem địa chỉ liên lạc của bạn' : 'View your contact address',
-        icon: 'map'
-      }
-    } as Record<string, { title: string; desc: string; icon: string }>;
-  });
-
-  readonly mappedScopes = computed(() => {
-    const data = this.consentData();
-    const descriptions = this.scopeDescriptions();
-    if (!data?.requestedScopes?.length) {
-      return [];
-    }
-
-    return data.requestedScopes.map(scope => ({
-      key: scope,
-      title: descriptions[scope]?.title || scope,
-      desc: descriptions[scope]?.desc || 'Extended access',
-      icon: descriptions[scope]?.icon || 'extension'
-    }));
-  });
+  readonly submitted = signal(false);
+  readonly mfa = signal<{ token: string; email: string } | null>(null);
+  returnUrl: string | null = null;
 
   readonly form = this.fb.nonNullable.group({
     email: ['', [Validators.required, Validators.email]],
     password: ['', Validators.required]
   });
 
-  private clientId = '';
-  private redirectUri = '';
-  private scopes: string[] = [];
-  private state = '';
-  private codeChallenge = '';
-  private codeChallengeMethod = 'S256';
-  private codeVerifier = '';
-  private isExternalClientFlow = false;
-
-  ngOnInit() {
-    void this.initOAuthParams();
-    this.initForm();
+  ngOnInit(): void {
+    const value = this.route.snapshot.queryParamMap.get('returnUrl');
+    // Only same-app relative paths are accepted (no protocol-relative or absolute URLs).
+    this.returnUrl = value && value.startsWith('/') && !value.startsWith('//') ? value : null;
   }
 
-  setLanguage(lang: SsoLocale) {
-    this.language.set(lang);
+  invalid(control: 'email' | 'password') {
+    const c = this.form.controls[control];
+    return c.invalid && (c.touched || this.submitted());
   }
 
-  toggleTheme() {
-    this.themeService.toggleTheme();
+  useAdminLogin(): void {
+    this.oauth.clearAuthorizeContext();
+    this.router.navigate(['/login'], { replaceUrl: true });
   }
 
-  togglePasswordVisibility() {
-    this.showPassword.update(value => !value);
-  }
-
-  submit() {
-    if (this.form.invalid || this.loading()) {
-      return;
-    }
-
-    if (!this.clientId || !this.redirectUri || !this.codeChallenge) {
-      this.error.set(
-        this.isExternalClientFlow
-          ? 'Missing PKCE code_challenge for this SSO request.'
-          : 'Secure sign-in context is not ready yet. Please try again.'
-      );
-      return;
-    }
-
+  submit(): void {
+    this.submitted.set(true);
+    if (this.form.invalid || this.loading()) return;
     this.error.set('');
     this.loading.set(true);
-
     const { email, password } = this.form.getRawValue();
-    const request: SsoAuthorizeRequest = {
-      email,
-      password,
-      clientId: this.clientId,
-      redirectUri: this.redirectUri,
-      scopes: this.scopes.length > 0 ? this.scopes : ['profile'],
-      state: this.state,
-      codeChallenge: this.codeChallenge,
-      codeChallengeMethod: this.codeChallengeMethod
-    };
-
-    this.auth
-      .ssoAuthorize(request)
-      .subscribe({
-        next: (res) => {
-          if (!res.success || !res.data) {
-            this.handleError(this.t().errorFailed);
-            return;
-          }
-
-          if (res.data.requiresConsent) {
-            this.consentData.set(res.data);
-            this.showConsent.set(true);
-            this.loading.set(false);
-            return;
-          }
-
-          if (!res.data.code) {
-            this.handleError(this.t().errorCodeMissing);
-            return;
-          }
-
-          this.redirectWithCode(res.data.code, res.data.state);
-        },
-        error: (err: any) => {
-          this.handleError(err.error?.error?.message || err.error?.message || this.t().errorFailed);
-        }
-      });
+    this.auth.ssoLogin(email, password).subscribe({
+      next: res => this.complete(res.data, email),
+      error: err => this.fail(err)
+    });
   }
 
-  approveConsent() {
-    if (this.form.invalid || this.loading()) {
-      return;
-    }
-
+  verifyMfa(code: string): void {
+    const pending = this.mfa();
+    if (!pending) return;
     this.error.set('');
     this.loading.set(true);
-
-    const { email, password } = this.form.getRawValue();
-
-    const body: SsoConsentRequest = {
-      email,
-      password,
-      clientId: this.clientId,
-      redirectUri: this.redirectUri,
-      scopes: this.scopes,
-      state: this.state,
-      codeChallenge: this.codeChallenge,
-      codeChallengeMethod: this.codeChallengeMethod,
-      approve: true
-    };
-
-    this.auth
-      .ssoConsent(body)
-      .subscribe({
-        next: (res) => {
-          if (!res.success || !res.data?.code) {
-            this.handleError(this.t().errorConsentFailed);
-            return;
-          }
-
-          this.redirectWithCode(res.data.code, res.data.state);
-        },
-        error: (err: any) => {
-          this.handleError(err.error?.error?.message || err.error?.message || this.t().errorConsentFailed);
-        }
-      });
-  }
-
-  denyConsent() {
-    this.error.set(this.t().errorDenied);
-    this.showConsent.set(false);
-  }
-
-  private async initOAuthParams() {
-    const params = this.route.snapshot.queryParamMap;
-    const clientIdParam = params.get('client_id')?.trim() || '';
-    const redirectUriParam = params.get('redirect_uri')?.trim() || '';
-    const scopeParam = params.get('scope') || '';
-    const scopesParam = params.get('scopes') || '';
-    const codeChallengeParam = params.get('code_challenge')?.trim() || '';
-
-    this.state = params.get('state') || '';
-    this.codeChallengeMethod = params.get('code_challenge_method') || environment.oauth.codeChallengeMethod;
-
-    let scopesFromParam: string[] = [];
-    if (scopeParam) {
-      scopesFromParam = scopeParam.split(/\s+/).map(scope => scope.trim()).filter(Boolean);
-    } else if (scopesParam) {
-      scopesFromParam = scopesParam.split(',').map(scope => scope.trim()).filter(Boolean);
-    }
-
-    this.isExternalClientFlow = !!clientIdParam && !!redirectUriParam;
-
-    if (this.isExternalClientFlow) {
-      this.clientId = clientIdParam;
-      this.redirectUri = redirectUriParam;
-      this.scopes = scopesFromParam.length > 0 ? scopesFromParam : environment.oauth.defaultScopes;
-      this.codeChallenge = codeChallengeParam;
-
-      if (!this.codeChallenge) {
-        this.error.set('Missing PKCE code_challenge for external SSO client.');
+    this.auth.verifySsoMfa(pending.token, code).subscribe({
+      next: res => this.complete(res.data, pending.email),
+      error: err => {
+        if (apiErrorCode(err) === 'INVALID_MFA_CHALLENGE') this.mfa.set(null);
+        this.fail(err);
       }
+    });
+  }
 
+  private complete(data: HostedSsoLoginResponse | null, email: string) {
+    if (data?.mfaRequired && data.mfaToken) {
+      this.loading.set(false);
+      this.mfa.set({ token: data.mfaToken, email: data.user?.email || email });
       return;
     }
-
-    this.clientId = environment.oauth.clientId;
-    this.redirectUri = environment.oauth.redirectUri?.trim() || `${window.location.origin}/auth/callback`;
-    this.scopes = environment.oauth.defaultScopes;
-    this.state = params.get('returnUrl')?.trim() || 'internal-sso';
-
-    const pkceContext = await this.oauth.createPkceContext();
-    this.codeVerifier = pkceContext.codeVerifier;
-    this.codeChallenge = pkceContext.codeChallenge;
-  }
-
-  private initForm() {
-    const email = this.route.snapshot.queryParamMap.get('email')?.trim();
-    if (email) {
-      this.form.patchValue({ email });
+    if (!data?.accessToken || !data.user?.userId) {
+      this.fail(null);
+      return;
     }
+    this.auth.setHostedSsoSession(data);
+    this.router.navigateByUrl(this.returnUrl ?? '/', { replaceUrl: true });
   }
 
-  private handleError(message: string) {
-    this.error.set(message);
-    this.notify.error(message);
+  private fail(err: unknown) {
     this.loading.set(false);
-  }
-
-  private redirectWithCode(code: string, state?: string) {
-    const url = new URL(this.redirectUri);
-    url.searchParams.set('code', code);
-    if (state) {
-      url.searchParams.set('state', state);
-    }
-
-    if (!this.isExternalClientFlow && this.codeVerifier) {
-      this.oauth.saveAuthorizeContext({
-        clientId: this.clientId,
-        redirectUri: this.redirectUri,
-        codeVerifier: this.codeVerifier
-      });
-    }
-
-    this.notify.success('Redirecting...');
-    window.location.assign(url.toString());
+    this.error.set(err ? apiErrorMessage(err, this.t().authFailed) : this.t().authFailed);
   }
 }
