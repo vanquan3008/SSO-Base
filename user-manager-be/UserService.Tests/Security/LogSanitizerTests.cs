@@ -9,6 +9,7 @@ public class LogSanitizerTests
     [InlineData("", "")]
     [InlineData("/api/users", "/api/users")]
     [InlineData("/api\r\n2026-11-28 [INF] forged", "/api2026-11-28 [INF] forged")]
+    [InlineData("a\u0085b\fc\vd", "abcd")]
     public void Clean_RemovesLineBreaks(string? input, string expected)
         => LogSanitizer.Clean(input).Should().Be(expected);
 

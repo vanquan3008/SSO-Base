@@ -1,6 +1,7 @@
 using System.Net;
 using System.Text.Json;
 using UserService.Api.Auth;
+using UserService.Application.Common;
 using UserService.Domain.Exceptions;
 using DomainAuthException = UserService.Domain.Exceptions.AuthenticationException;
 using FluentValidationException = FluentValidation.ValidationException;
@@ -193,14 +194,14 @@ public class ExceptionHandlingMiddleware(
         
         logger.Log(
             logLevel,
-            exception,
-            "[{RequestId}] HTTP {Method} {Path} resulted in {StatusCode}. Exception: {ExceptionType}, Message: {Message}",
-            requestId,
-            context.Request.Method,
-            context.Request.Path,
+            "[{RequestId}] HTTP {Method} {Path} resulted in {StatusCode}. Exception: {ExceptionType}, Message: {Message}. {ExceptionDetails}",
+            LogSanitizer.Clean(requestId),
+            LogSanitizer.Clean(context.Request.Method),
+            LogSanitizer.Clean(context.Request.Path.Value),
             statusCode,
             exception.GetType().Name,
-            exception.Message);
+            LogSanitizer.Clean(exception.Message),
+            JsonEncodedText.Encode(exception.ToString()).ToString());
     }
 
     private static LogLevel DetermineLogLevel(int statusCode, Exception exception)
