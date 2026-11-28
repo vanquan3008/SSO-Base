@@ -63,13 +63,13 @@ public sealed class AuditLogger : IAuditLogger
 
             _logger.Log(
                 succeeded ? LogLevel.Information : LogLevel.Warning,
-                "Audit {EventType} succeeded={Succeeded} actor={ActorUserId} target={TargetType}:{TargetId} ip={IpAddress}",
-                LogSanitizer.Clean(eventType), succeeded, actorId,
+                "Audit {AuditLogId} succeeded={Succeeded} actor={ActorUserId} target={TargetType}:{TargetId} ip={IpAddress}",
+                record.Id, succeeded, actorId,
                 LogSanitizer.Clean(entry.TargetType), LogSanitizer.Clean(entry.TargetId), LogSanitizer.Clean(_requestContext.IpAddress));
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Failed to persist audit event {EventType}", eventType);
+            _logger.LogError(ex, "Failed to persist audit event");
         }
     }
 }
