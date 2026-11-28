@@ -111,7 +111,7 @@ Sign in with `ADMIN_EMAIL` / `ADMIN_PASSWORD`, then open **My account → Securi
 
 | Capability | Details |
 |---|---|
-| Authorization code + PKCE | `response_type=code` only, `S256` required, exact redirect-URI matching against the application's allow-list |
+| Authorization code + PKCE | `response_type=code` only, `S256` required, exact (character-for-character) redirect-URI matching against the application's allow-list; loopback IP literals may use any port (RFC 8252) |
 | Hosted sign-in & consent | `/sso-login` and `/oauth/authorize`. Consent is remembered per user, application and scope |
 | ID tokens | `openid` scope. Claims: `sub`, `aud`, `nonce`, `sid`, `auth_time`, `amr`, plus `email` and `profile` claims when those scopes are granted |
 | Token endpoint | Form-encoded, standard RFC 6749 responses. Client auth: `client_secret_basic`, `client_secret_post` or `none` (public clients). The legacy JSON body is still accepted |
@@ -366,7 +366,7 @@ redeemed or rotated exactly once, even under parallel requests.
 
 ## API reference
 
-**Envelope:** `{ success, data, message, error: { code, message, errors } }`. Paged lists also include `totalCount`, `pageNumber` and `pageSize`.
+**Envelope:** `{ success, data, message, error: { code, message, errors } }`. Paged lists also include `totalCount`, `pageNumber` and `pageSize`. The exception is `/api/oauth/token`, whose errors always use the RFC 6749 format `{ error, error_description }`.
 Interactive docs are served at `/swagger` when `AppSettings__Swagger__Enabled=true`.
 
 <details open>
@@ -459,6 +459,7 @@ Step-by-step client guide: [THIRD_PARTY_APP_INTEGRATION.md](user-manager-be/docs
 | POST | `/` | `APPLICATION.CREATE` |
 | DELETE | `/{applicationId}` | `APPLICATION.MANAGE` |
 | GET · POST | `/{applicationId}/credentials` · `/credentials/rotate` | `APPLICATION.MANAGE` |
+| PUT | `/{applicationId}/redirect-uris` (replace the exact-match allow-list, max 20) | `APPLICATION.MANAGE` |
 | PUT | `/{applicationId}/logo` | `APPLICATION.MANAGE` |
 | GET · POST · DELETE | `/{applicationId}/users[/{userId}]` | `USER.MANAGE` |
 | GET | `/{applicationId}/roles` | `ROLE.READ` |
@@ -597,7 +598,8 @@ Every setting in `appsettings.json` can be overridden with an environment variab
 | `AppSettings__Security__ForwardedHeaders__KnownProxies__N` · `__KnownNetworks__N` | — | Trusted reverse proxies (IP / CIDR) |
 | `AppSettings__RateLimit__RequestLimit` · `__WindowSeconds` | `100` / `60` | Global per-IP limit |
 | `AppSettings__RateLimit__AuthRequestLimit` · `__AuthWindowSeconds` | `10` / `60` | Credential endpoints per IP |
-| `AppSettings__OAuth__AllowedRedirectUriHosts__N` · `__DefaultApplicationAllowedRedirectUris__N` | — | Redirect-URI policy, URIs of the seeded console client |
+| `AppSettings__OAuth__DefaultApplicationAllowedRedirectUris__N` | — | Redirect URIs of the seeded console client |
+| `AppSettings__OAuth__FirstPartyClientIds__N` | `SEED_APP_API_KEY` | Clients whose OAuth access tokens target the platform API. Every other client gets tokens with `aud` = its own client id |
 | `EmailSettings__Smtp__Host` · `__Port` · `__Username` · `__Password` | port `587` | SMTP delivery |
 | `EmailSettings__Sender__FromEmail` · `__FromName` | — | Sender identity |
 
@@ -732,7 +734,7 @@ dev and test tooling (Karma, `glob`, `sockjs`).
 |---|---|
 | Passwords | ASP.NET Core Identity (PBKDF2). At least 8 characters with upper- and lower-case letters, a digit and a symbol. Lockout after 5 failures for 5 minutes |
 | Secrets at rest | Client secrets: BCrypt (cost 12), shown once. Refresh tokens, codes, magic links, recovery codes: SHA-256 of high-entropy random values. Signing keys: Data Protection |
-| Tokens | RS256 only (`alg` pinned); issuer, audience and lifetime validated; 30 s clock skew; session-bound (`sid`) |
+| Tokens | RS256 only (`alg` pinned); `typ` must be `at+jwt`; issuer, audience and lifetime validated; 30 s clock skew; session-bound (`sid`). Access tokens issued to third-party clients carry `aud` = their client id and are accepted only by UserInfo, so a relying party cannot call the platform API with a user's token |
 | Browser | Refresh token in an `HttpOnly` cookie scoped to `/api/auth` (`Secure; SameSite=None` over HTTPS). Cookie endpoints require `X-Requested-With`. Access token in `sessionStorage`. CORS limited to configured origins |
 | Headers | `X-Content-Type-Options`, `X-Frame-Options: DENY`, `Referrer-Policy: no-referrer`, restrictive CSP, `Cache-Control: no-store` on auth and account endpoints. HSTS and HTTPS redirection outside Development |
 | Abuse | Per-IP rate limits, uniform login errors, a dummy password hash for unknown users (prevents timing-based account discovery), forwarded headers trusted only from configured proxies |

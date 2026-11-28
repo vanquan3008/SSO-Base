@@ -1,5 +1,10 @@
+using System.Net;
+
 namespace UserService.Application.Features.OAuth.Policies;
 
+/// <summary>
+/// Redirect URI rules from RFC 6749 §3.1.2, RFC 8252 §7.3/§8.3 and the OAuth Security BCP (RFC 9700 §4.1.3).
+/// </summary>
 public sealed class OAuthRedirectUriPolicy : IOAuthRedirectUriPolicy
 {
     private readonly AppSettings _appSettings;
@@ -9,59 +14,59 @@ public sealed class OAuthRedirectUriPolicy : IOAuthRedirectUriPolicy
         _appSettings = appSettings;
     }
 
-    public bool IsAllowed(string redirectUri, string? appAllowedUris = null)
+    public bool IsAllowed(string redirectUri, IReadOnlyCollection<string> registeredRedirectUris)
     {
-        if (!Uri.TryCreate(redirectUri, UriKind.Absolute, out var uri))
-            return false;
-        var isLocalhost = uri.IsLoopback;
-        var isHttps = string.Equals(
-            uri.Scheme,
-            Uri.UriSchemeHttps,
-            StringComparison.OrdinalIgnoreCase);
+        // A client must register its redirect URIs; there is no host-based fallback (RFC 9700 §4.1.3).
+        return TryParseWellFormed(redirectUri, out var requested)
+               && registeredRedirectUris.Any(registered => Matches(redirectUri, requested, registered));
+    }
 
-        if (!isLocalhost && !isHttps)
+    public bool IsWellFormed(string redirectUri) => TryParseWellFormed(redirectUri, out _);
+
+    /// <summary>
+    /// Absolute URI, no fragment (RFC 6749 §3.1.2), no user info, and HTTPS — or plain HTTP on a loopback
+    /// host when <c>OAuth:AllowHttpForLocalhost</c> is enabled (RFC 8252 §8.3).
+    /// </summary>
+    private bool TryParseWellFormed(string? value, out Uri uri)
+    {
+        uri = null!;
+        if (string.IsNullOrWhiteSpace(value) || !Uri.TryCreate(value, UriKind.Absolute, out var parsed))
             return false;
-        if (isLocalhost &&
-            !_appSettings.OAuth.AllowHttpForLocalhost &&
-            !isHttps)
+        if (parsed.Fragment.Length > 0 || value.Contains('#') || parsed.UserInfo.Length > 0)
+            return false;
+
+        var isHttps = parsed.Scheme == Uri.UriSchemeHttps;
+        var isLoopbackHttp = parsed.Scheme == Uri.UriSchemeHttp && parsed.IsLoopback && _appSettings.OAuth.AllowHttpForLocalhost;
+        if (!isHttps && !isLoopbackHttp)
+            return false;
+
+        uri = parsed;
+        return true;
+    }
+
+    /// <summary>
+    /// Simple string comparison, except that a loopback IP literal may use any port (RFC 8252 §7.3), because
+    /// native apps bind an ephemeral port at runtime.
+    /// </summary>
+    private static bool Matches(string requestedValue, Uri requested, string registeredValue)
+    {
+        if (string.Equals(requestedValue, registeredValue, StringComparison.Ordinal))
+            return true;
+
+        if (!IsLoopbackIpLiteral(requested) ||
+            !Uri.TryCreate(registeredValue, UriKind.Absolute, out var registered) ||
+            !IsLoopbackIpLiteral(registered))
         {
             return false;
         }
 
-        if (!string.IsNullOrWhiteSpace(appAllowedUris))
-        {
-            var allowedUris = appAllowedUris
-                .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
-                .Select(allowed => Uri.TryCreate(allowed, UriKind.Absolute, out var allowedUri) ? allowedUri : null)
-                .Where(allowedUri => allowedUri != null)
-                .Cast<Uri>()
-                .ToArray();
-
-            if (allowedUris.Any())
-                return allowedUris.Any(allowedUri => IsExactMatch(uri, allowedUri));
-        }
-
-        var allowedHosts = _appSettings.OAuth.AllowedRedirectUriHosts
-            .Where(x => !string.IsNullOrWhiteSpace(x))
-            .Select(x => x.Trim())
-            .ToHashSet(StringComparer.OrdinalIgnoreCase);
-
-        if (allowedHosts.Count == 0)
-            return false;
-
-        return allowedHosts.Contains(uri.Host);
+        return requested.Scheme == registered.Scheme
+               && string.Equals(requested.Host, registered.Host, StringComparison.OrdinalIgnoreCase)
+               && string.Equals(requested.PathAndQuery, registered.PathAndQuery, StringComparison.Ordinal);
     }
 
-    private static bool IsExactMatch(Uri actual, Uri allowed)
-    {
-        return
-            string.Equals(actual.Scheme, allowed.Scheme, StringComparison.OrdinalIgnoreCase)
-            && string.Equals(actual.Host, allowed.Host, StringComparison.OrdinalIgnoreCase)
-            && actual.Port == allowed.Port
-            && string.Equals(
-                actual.AbsolutePath.TrimEnd('/'),
-                allowed.AbsolutePath.TrimEnd('/'),
-                StringComparison.OrdinalIgnoreCase);
-    }
+    private static bool IsLoopbackIpLiteral(Uri uri)
+        => uri.HostNameType is UriHostNameType.IPv4 or UriHostNameType.IPv6
+           && IPAddress.TryParse(uri.DnsSafeHost, out var address)
+           && IPAddress.IsLoopback(address);
 }
-

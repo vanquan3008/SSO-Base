@@ -11,6 +11,7 @@ public interface IApplicationAppService
     Task DeleteAsync(Guid applicationId, CancellationToken cancellationToken = default);
     Task<ApplicationCredentialDto> GetCredentialsAsync(Guid applicationId, CancellationToken cancellationToken = default);
     Task<ApplicationCredentialDto> RotateClientSecretAsync(Guid applicationId, CancellationToken cancellationToken = default);
+    Task<ApplicationCredentialDto> UpdateRedirectUrisAsync(Guid applicationId, IReadOnlyCollection<string> redirectUris, CancellationToken cancellationToken = default);
     Task<AppApplication?> UpdateLogoUrlAsync(Guid id, string? logoUrl, CancellationToken cancellationToken = default);
     Task<Guid?> ResolveApplicationIdAsync(string? clientId, CancellationToken cancellationToken = default);
 }

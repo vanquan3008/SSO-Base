@@ -112,6 +112,7 @@ public static class AuditEventTypes
     public const string ApplicationCreated = "application.created";
     public const string ApplicationDeleted = "application.deleted";
     public const string ApplicationSecretRotated = "application.secret.rotated";
+    public const string ApplicationRedirectUrisUpdated = "application.redirect_uris.updated";
 
     public const string SigningKeyRotated = "security.signing_key.rotated";
     public const string SigningKeyRevoked = "security.signing_key.revoked";

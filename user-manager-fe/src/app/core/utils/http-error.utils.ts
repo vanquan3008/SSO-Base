@@ -21,7 +21,9 @@ type ApiErrorPayload = {
   detail?: string;
   title?: string;
   errors?: Record<string, string[]>;
-  error?: {
+  /** RFC 6749 §5.2 token-endpoint errors use a string code plus error_description. */
+  error_description?: string;
+  error?: string | {
     message?: string;
     code?: string;
     errors?: Record<string, string[]>;
@@ -70,11 +72,13 @@ export function getHttpErrorMessage(
 
     if (body && typeof body === 'object') {
       const payload = body as ApiErrorPayload;
+      const envelopeError = typeof payload.error === 'object' ? payload.error : undefined;
 
       const detailedMessage =
-        (isMeaningfulMessage(payload.error?.message) ? payload.error.message.trim() : null) ??
+        (isMeaningfulMessage(envelopeError?.message) ? envelopeError.message.trim() : null) ??
+        (isMeaningfulMessage(payload.error_description) ? payload.error_description.trim() : null) ??
         (isMeaningfulMessage(payload.detail) ? payload.detail.trim() : null) ??
-        flattenValidationErrors(payload.error?.errors) ??
+        flattenValidationErrors(envelopeError?.errors) ??
         flattenValidationErrors(payload.errors);
 
       if (detailedMessage) {
@@ -106,7 +110,9 @@ export function apiErrorMessage(err: unknown, fallback = 'Something went wrong. 
 /** Stable error code from the API envelope (e.g. INVALID_CREDENTIALS, MFA_REQUIRED). */
 export function apiErrorCode(err: unknown): string | null {
   if (err instanceof HttpErrorResponse && err.error && typeof err.error === 'object') {
-    const code = (err.error as ApiErrorPayload).error?.code;
+    const error = (err.error as ApiErrorPayload).error;
+    // Envelope errors carry { code }, RFC 6749 token errors carry the code as a string (e.g. invalid_grant).
+    const code = typeof error === 'object' ? error?.code : error;
     return typeof code === 'string' ? code : null;
   }
   return null;

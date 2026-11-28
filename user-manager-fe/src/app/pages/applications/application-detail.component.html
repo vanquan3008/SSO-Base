@@ -46,8 +46,40 @@
               </div>
             </dl>
             <div>
-              <p class="mb-2 text-xs font-medium text-fg-3">{{ t().appsRedirects }}</p>
-              @if (redirectUris().length) {
+              <div class="mb-2 flex items-center justify-between gap-2">
+                <p class="text-xs font-medium text-fg-3">{{ t().appsRedirects }}</p>
+                @if (canEditRedirects() && !editingRedirects()) {
+                  <button type="button" class="btn-ghost btn-sm" (click)="startEditRedirects()"><span class="material-symbols-outlined">edit</span>{{ t().edit }}</button>
+                }
+              </div>
+              @if (editingRedirects()) {
+                <form class="space-y-2" (ngSubmit)="saveRedirects()">
+                  @for (uri of redirectDraft(); track $index; let i = $index) {
+                    <div>
+                      <div class="flex items-center gap-2">
+                        <input type="url" class="input font-mono text-[13px]" [class.input-invalid]="!!redirectDraftErrors()[i]"
+                               [name]="'redirect-' + i" [ngModel]="uri" (ngModelChange)="updateRedirectRow(i, $event)"
+                               placeholder="https://app.example.com/auth/callback" autocomplete="off" spellcheck="false"
+                               [attr.aria-label]="t().appsRedirects + ' ' + (i + 1)" [attr.aria-invalid]="!!redirectDraftErrors()[i]" />
+                        <button type="button" class="btn-danger-ghost btn-icon shrink-0" (click)="removeRedirectRow(i)" [attr.aria-label]="t().adRemoveRedirect">
+                          <span class="material-symbols-outlined">delete</span>
+                        </button>
+                      </div>
+                      @if (redirectDraftErrors()[i]) { <p class="error-text">{{ redirectDraftErrors()[i] }}</p> }
+                    </div>
+                  }
+                  <button type="button" class="btn-ghost btn-sm" (click)="addRedirectRow()" [disabled]="redirectDraft().length >= maxRedirectUris">
+                    <span class="material-symbols-outlined">add</span>{{ t().adAddRedirect }}
+                  </button>
+                  <p class="hint">{{ t().adRedirectsHint }}</p>
+                  <div class="flex justify-end gap-2 pt-1">
+                    <button type="button" class="btn-secondary btn-sm" (click)="cancelEditRedirects()" [disabled]="savingRedirects()">{{ t().cancel }}</button>
+                    <button type="submit" class="btn-primary btn-sm" [disabled]="savingRedirects() || !redirectDraftValid()">
+                      @if (savingRedirects()) { <span class="spinner h-3 w-3"></span>{{ t().saving }} } @else { {{ t().save }} }
+                    </button>
+                  </div>
+                </form>
+              } @else if (redirectUris().length) {
                 <ul class="space-y-1.5">
                   @for (uri of redirectUris(); track uri) {
                     <li class="flex items-center gap-2 rounded-lg border border-line px-3 py-2"><span class="material-symbols-outlined text-[16px] text-fg-3">link</span><code class="min-w-0 flex-1 truncate font-mono text-[13px]">{{ uri }}</code></li>

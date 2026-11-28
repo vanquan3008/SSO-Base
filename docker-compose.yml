@@ -48,7 +48,6 @@ services:
       AppSettings__Security__ForwardedHeaders__KnownNetworks__0: ${TRUSTED_PROXY_NETWORK:-}
       AppSettings__Security__DataProtectionCertificatePath: ${DATA_PROTECTION_CERT_PATH:-}
       AppSettings__Security__DataProtectionCertificatePassword: ${DATA_PROTECTION_CERT_PASSWORD:-}
-      AppSettings__OAuth__AllowedRedirectUriHosts__0: ${OAUTH_ALLOWED_HOST_1:-localhost}
       AppSettings__OAuth__DefaultApplicationAllowedRedirectUris__0: ${OAUTH_DEFAULT_REDIRECT_URI_1:-http://localhost:8080/oauth/callback}
       AppSettings__OAuth__DefaultApplicationAllowedRedirectUris__1: ${OAUTH_DEFAULT_REDIRECT_URI_2:-http://localhost:8080/auth/callback}
       AppSettings__OAuth__AllowHttpForLocalhost: ${OAUTH_ALLOW_HTTP_LOCALHOST:-true}

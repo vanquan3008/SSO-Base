@@ -15,7 +15,8 @@ public sealed record AccessTokenRequest(
     IEnumerable<string>? OAuthScopes = null,
     Guid? SessionId = null,
     string? ClientId = null,
-    string? AuthenticationMethod = null
+    string? AuthenticationMethod = null,
+    string? Audience = null // "aud" claim; null means the platform API audience
 );
 
 /// <summary>Inputs for an OpenID Connect ID token (OIDC Core §2).</summary>

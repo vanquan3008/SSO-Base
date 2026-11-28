@@ -40,6 +40,14 @@ public class TokenServiceTests
     }
 
     [Fact]
+    public void AccessToken_UsesRequestedAudience_WhenGiven()
+    {
+        var token = _sut.GenerateAccessToken(Request(Guid.NewGuid()) with { Audience = "client-1" });
+
+        new JwtSecurityTokenHandler().ReadJwtToken(token).Audiences.Should().ContainSingle("client-1");
+    }
+
+    [Fact]
     public void AccessToken_CarriesSessionIdClientAndPermissions()
     {
         var userId = Guid.NewGuid();

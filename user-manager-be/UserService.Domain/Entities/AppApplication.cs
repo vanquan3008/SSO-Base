@@ -168,6 +168,16 @@ public sealed class AppApplication : AuditableAggregateRoot<Guid>
         Touch();
     }
 
+    /// <summary>Replaces the whole redirect URI allow-list (duplicates are collapsed).</summary>
+    public void ReplaceRedirectUris(IEnumerable<UrlValue> redirectUris)
+    {
+        ArgumentNullException.ThrowIfNull(redirectUris);
+        _allowedRedirectUris.Clear();
+        foreach (var uri in redirectUris)
+            _allowedRedirectUris.Add(uri);
+        Touch();
+    }
+
     public void SetBackchannelLogoutUri(UrlValue? backchannelLogoutUri)
     {
         BackchannelLogoutUri = backchannelLogoutUri;

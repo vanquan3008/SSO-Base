@@ -11,6 +11,7 @@ import { RolesService } from '../../core/services/roles.service';
 import { UsersService } from '../../core/services/users.service';
 import { TranslateService } from '../../core/services/translate.service';
 import { apiErrorMessage } from '../../core/utils/http-error.utils';
+import { MAX_REDIRECT_URIS, isValidRedirectUri } from '../../core/utils/redirect-uri';
 import { formatDateTime } from '../../shared/utils/format';
 import { NotificationService } from '../../core/services/notification.service';
 import { ConfirmService } from '../../core/services/confirm.service';
@@ -118,6 +119,10 @@ export class ApplicationDetailComponent implements OnInit {
   readonly rotatingSecret = signal(false);
   readonly showClientSecret = signal(false);
   readonly selectedGlobalRoleId = signal('');
+  readonly editingRedirects = signal(false);
+  readonly redirectDraft = signal<string[]>([]);
+  readonly savingRedirects = signal(false);
+  readonly maxRedirectUris = MAX_REDIRECT_URIS;
   readonly defaultAppLogoDataUri = environment.defaultAppLogoDataUri;
 
   readonly totalUsers = computed(() => this.appUsers().length);
@@ -140,6 +145,21 @@ export class ApplicationDetailComponent implements OnInit {
       )
     )
   );
+  /** Credentials are only readable with the manage-applications permission, which the update endpoint also requires. */
+  readonly canEditRedirects = computed(() => !!this.credentials());
+  readonly redirectDraftErrors = computed(() => {
+    const t = this.t();
+    const seen = new Set<string>();
+    return this.redirectDraft().map((raw) => {
+      const value = raw.trim();
+      if (!value) return '';
+      if (!isValidRedirectUri(value)) return t.adRedirectInvalid;
+      if (seen.has(value)) return t.adRedirectDuplicate;
+      seen.add(value);
+      return '';
+    });
+  });
+  readonly redirectDraftValid = computed(() => this.redirectDraftErrors().every((error) => !error));
   readonly primaryRedirectHost = computed(() => this.redirectHosts()[0] || 'No redirect host');
   readonly capabilityFeatureCount = computed(() => this.capabilities()?.enabledFeatures.length ?? 0);
   readonly capabilityPermissionCount = computed(() => this.capabilities()?.enabledPermissions.length ?? 0);
@@ -638,6 +658,74 @@ export class ApplicationDetailComponent implements OnInit {
         error: (err: any) => {
           this.notify.error(err.error?.message || 'Failed to rotate client secret.');
         }
+      });
+  }
+
+  startEditRedirects() {
+    this.redirectDraft.set(this.redirectUris().length ? [...this.redirectUris()] : ['']);
+    this.editingRedirects.set(true);
+  }
+
+  cancelEditRedirects() {
+    this.editingRedirects.set(false);
+    this.redirectDraft.set([]);
+  }
+
+  addRedirectRow() {
+    if (this.redirectDraft().length >= MAX_REDIRECT_URIS) return;
+    this.redirectDraft.update((rows) => [...rows, '']);
+  }
+
+  updateRedirectRow(index: number, value: string) {
+    this.redirectDraft.update((rows) => rows.map((row, i) => (i === index ? value : row)));
+  }
+
+  removeRedirectRow(index: number) {
+    this.redirectDraft.update((rows) => rows.filter((_, i) => i !== index));
+  }
+
+  async saveRedirects() {
+    const app = this.app();
+    if (!app || !this.redirectDraftValid()) return;
+
+    const redirectUris = Array.from(new Set(this.redirectDraft().map((row) => row.trim()).filter(Boolean)));
+    if (redirectUris.length > MAX_REDIRECT_URIS) {
+      this.notify.error(this.t().adRedirectsTooMany);
+      return;
+    }
+
+    if (!redirectUris.length) {
+      const confirmed = await this.confirm.confirm({
+        title: this.t().adRedirectsEmptyTitle,
+        message: this.t().adRedirectsEmptyConfirm,
+        confirmText: this.t().save,
+        cancelText: this.t().cancel,
+        variant: 'danger'
+      });
+      if (!confirmed) return;
+    }
+
+    this.savingRedirects.set(true);
+    this.applicationsService.updateApplicationRedirectUris(app.id, redirectUris)
+      .pipe(
+        finalize(() => this.savingRedirects.set(false)),
+        takeUntilDestroyed(this.destroyRef)
+      )
+      .subscribe({
+        next: (response) => {
+          if (!response.success || !response.data) {
+            this.notify.error(response.message || apiErrorMessage(null));
+            return;
+          }
+
+          // Merge only the URIs: the response never carries a client secret, and a freshly rotated one may be on screen.
+          const allowedRedirectUris = response.data.allowedRedirectUris;
+          this.credentials.update((current) => (current ? { ...current, allowedRedirectUris } : response.data));
+          this.app.update((current) => (current ? { ...current, allowedRedirectUris } : current));
+          this.editingRedirects.set(false);
+          this.notify.success(this.t().adRedirectsSaved);
+        },
+        error: (err: unknown) => this.notify.error(apiErrorMessage(err))
       });
   }
 

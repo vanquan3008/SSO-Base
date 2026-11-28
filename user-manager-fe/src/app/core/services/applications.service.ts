@@ -242,6 +242,16 @@ export class ApplicationsService {
       })));
   }
 
+  /** Replaces the application's redirect URI allow-list (exact-match URIs). */
+  updateApplicationRedirectUris(applicationId: string, redirectUris: string[]) {
+    return this.http
+      .put<ApiResponse<ApplicationCredentialItem>>(`${this.api}/${applicationId}/redirect-uris`, { redirectUris })
+      .pipe(map(res => ({
+        ...res,
+        data: res.data ? normalizeApplicationCredentialItem(res.data as unknown as Record<string, unknown>) : null
+      })));
+  }
+
   rotateApplicationClientSecret(applicationId: string) {
     return this.http
       .post<ApiResponse<ApplicationCredentialItem>>(`${this.api}/${applicationId}/credentials/rotate`, { confirm: true })
