@@ -243,6 +243,30 @@ public sealed class AuthFlowTests
     }
 
     [Fact]
+    public async Task TokenEndpoint_ReturnsRfc6749Errors_ForJsonAndFormRequests()
+    {
+        var client = _factory.CreateClient();
+        var json = await client.PostJsonAsync("/api/oauth/token", new
+        {
+            grantType = "authorization_code", clientId = SsoApiFactory.ConsoleClientId,
+            redirectUri = SsoApiFactory.RedirectUri, code = "not-a-real-code", codeVerifier = new string('a', 43)
+        });
+        var form = await client.PostAsync("/api/oauth/token", new FormUrlEncodedContent(new Dictionary<string, string>
+        {
+            ["grant_type"] = "authorization_code", ["client_id"] = SsoApiFactory.ConsoleClientId,
+            ["redirect_uri"] = SsoApiFactory.RedirectUri, ["code"] = "not-a-real-code", ["code_verifier"] = new string('a', 43)
+        }));
+
+        foreach (var response in new[] { json, form })
+        {
+            response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+            var body = await response.ReadJsonAsync();
+            body.GetProperty("error").GetString().Should().Be("invalid_grant");
+            body.GetProperty("error_description").GetString().Should().NotBeNullOrWhiteSpace();
+        }
+    }
+
+    [Fact]
     public async Task ThirdPartyClientToken_IsAcceptedOnlyByUserInfo()
     {
         var (_, adminToken) = await LoginAsync(SsoApiFactory.AdminEmail, SsoApiFactory.AdminPassword);

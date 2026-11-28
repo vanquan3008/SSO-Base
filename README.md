@@ -366,7 +366,7 @@ redeemed or rotated exactly once, even under parallel requests.
 
 ## API reference
 
-**Envelope:** `{ success, data, message, error: { code, message, errors } }`. Paged lists also include `totalCount`, `pageNumber` and `pageSize`.
+**Envelope:** `{ success, data, message, error: { code, message, errors } }`. Paged lists also include `totalCount`, `pageNumber` and `pageSize`. The exception is `/api/oauth/token`, whose errors always use the RFC 6749 format `{ error, error_description }`.
 Interactive docs are served at `/swagger` when `AppSettings__Swagger__Enabled=true`.
 
 <details open>

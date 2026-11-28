@@ -10,16 +10,18 @@ public static class LogSanitizer
     private static readonly string LineSeparator = char.ConvertFromUtf32(0x2028);
     private static readonly string ParagraphSeparator = char.ConvertFromUtf32(0x2029);
 
-    public static string? Clean(string? value)
+    /// <summary>
+    /// Returns the value without CR, LF, U+2028 and U+2029, truncated to 512 characters.
+    /// Every returned string is produced by the replacements, never the raw input.
+    /// </summary>
+    public static string Clean(string? value)
     {
-        if (string.IsNullOrEmpty(value))
-            return value;
-
-        var cleaned = value
-            .Replace("\r", string.Empty, StringComparison.Ordinal)
-            .Replace("\n", string.Empty, StringComparison.Ordinal)
-            .Replace(LineSeparator, string.Empty, StringComparison.Ordinal)
-            .Replace(ParagraphSeparator, string.Empty, StringComparison.Ordinal);
+        // String.Replace(string, string) is ordinal; null and empty both log as an empty string.
+        var cleaned = (value ?? string.Empty)
+            .Replace("\r", string.Empty)
+            .Replace("\n", string.Empty)
+            .Replace(LineSeparator, string.Empty)
+            .Replace(ParagraphSeparator, string.Empty);
 
         return cleaned.Length > MaxLength ? string.Concat(cleaned.AsSpan(0, MaxLength), "...") : cleaned;
     }

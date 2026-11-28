@@ -84,44 +84,45 @@ public class OAuthController : ApiControllerBase
     }
 
     /// <summary>
-    /// Token endpoint. <c>application/x-www-form-urlencoded</c> requests receive a standard RFC 6749
-    /// response (snake_case, <c>error</c>/<c>error_description</c>); JSON requests keep the platform's
-    /// <c>ApiResponse</c> envelope for backwards compatibility. Client secrets may also be sent with HTTP Basic.
+    /// Token endpoint. Errors always use the RFC 6749 §5.2 format (<c>error</c>/<c>error_description</c>).
+    /// Successful <c>application/x-www-form-urlencoded</c> requests receive the standard snake_case response;
+    /// JSON requests keep the platform's <c>ApiResponse</c> envelope for backwards compatibility.
+    /// Client secrets may also be sent with HTTP Basic.
     /// </summary>
     [HttpPost("token")]
     [EnableRateLimiting(RateLimitPolicies.Auth)]
     [Consumes("application/x-www-form-urlencoded", "application/json")]
     [ProducesResponseType(typeof(ApiResponse<OAuthTokenResponse>), StatusCodes.Status200OK)]
-    [ProducesResponseType(typeof(ApiResponse<object>), StatusCodes.Status400BadRequest)]
-    [ProducesResponseType(typeof(ApiResponse<object>), StatusCodes.Status401Unauthorized)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(StatusCodes.Status401Unauthorized)]
     public async Task<IActionResult> Token(CancellationToken cancellationToken = default)
     {
         Response.Headers.CacheControl = "no-store";
         Response.Headers.Pragma = "no-cache";
 
-        // The content type only selects how the request is parsed and how the response is shaped.
-        // Client authentication and the code/refresh exchange run through the same single path.
+        // The content type only selects how the request is parsed and how a success is shaped. Client
+        // authentication, the code/refresh exchange and error handling are identical for both formats.
         var isForm = Request.HasFormContentType;
-        var (basicId, basicSecret) = ReadBasicCredentials();
-        var parsed = isForm
-            ? await ReadFormTokenRequestAsync(cancellationToken)
-            : await ReadJsonTokenRequestAsync(cancellationToken);
-        var tokenRequest = parsed with
-        {
-            ClientId = basicId ?? parsed.ClientId,
-            ClientSecret = basicSecret ?? parsed.ClientSecret
-        };
-
         OAuthTokenResponse result;
         try
         {
+            var (basicId, basicSecret) = ReadBasicCredentials();
+            var parsed = isForm
+                ? await ReadFormTokenRequestAsync(cancellationToken)
+                : await ReadJsonTokenRequestAsync(cancellationToken);
+            var tokenRequest = parsed with
+            {
+                ClientId = basicId ?? parsed.ClientId,
+                ClientSecret = basicSecret ?? parsed.ClientSecret
+            };
+
             result = await _mediator.Send(new ExchangeOAuthCodeCommand(tokenRequest), cancellationToken);
         }
-        catch (OAuthProtocolException ex) when (isForm)
+        catch (OAuthProtocolException ex)
         {
             return OAuthError(ex);
         }
-        catch (FluentValidation.ValidationException ex) when (isForm)
+        catch (FluentValidation.ValidationException ex)
         {
             return OAuthError(new OAuthProtocolException(OAuthErrors.InvalidRequest, string.Join(" ", ex.Errors.Select(e => e.ErrorMessage).Distinct())));
         }
