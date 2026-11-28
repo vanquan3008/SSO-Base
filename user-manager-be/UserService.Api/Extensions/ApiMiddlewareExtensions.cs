@@ -50,7 +50,6 @@ public static class ApiMiddlewareExtensions
             })).ExcludeFromDescription();
         }
 
-        app.UseSerilogRequestLogging();
         app.UseCors();
         app.UseApiMiddlewares();
         app.UseRateLimiter();
